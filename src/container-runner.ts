@@ -178,6 +178,43 @@ function buildVolumeMounts(
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
+
+  // Sync hooks from container/hooks/ into each group's .claude/hooks/
+  const hooksSrc = path.join(process.cwd(), 'container', 'hooks');
+  const hooksDst = path.join(groupSessionsDir, 'hooks');
+  if (fs.existsSync(hooksSrc)) {
+    fs.mkdirSync(hooksDst, { recursive: true });
+    for (const hookFile of fs.readdirSync(hooksSrc)) {
+      const srcFile = path.join(hooksSrc, hookFile);
+      if (!fs.statSync(srcFile).isFile()) continue;
+      fs.copyFileSync(srcFile, path.join(hooksDst, hookFile));
+    }
+  }
+
+  // Idempotently wire caveman SessionStart hook into settings.json
+  if (fs.existsSync(hooksDst)) {
+    const activateScript = path.join('/home/node/.claude/hooks', 'caveman-activate.js');
+    const settingsRaw = fs.readFileSync(settingsFile, 'utf8');
+    const settings = JSON.parse(settingsRaw);
+    if (!settings.hooks) settings.hooks = {};
+    if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+    const alreadyWired = settings.hooks.SessionStart.some(
+      (e: { hooks?: { command?: string }[] }) =>
+        e.hooks?.some((h) => h.command?.includes('caveman')),
+    );
+    if (!alreadyWired) {
+      settings.hooks.SessionStart.push({
+        hooks: [
+          {
+            type: 'command',
+            command: `node "${activateScript}"`,
+            timeout: 5,
+          },
+        ],
+      });
+      fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
+    }
+  }
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
