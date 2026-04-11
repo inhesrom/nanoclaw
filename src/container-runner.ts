@@ -265,7 +265,10 @@ async function buildContainerArgs(
     // Claude Code falls back to OAuth credentials instead of using the placeholder.
     if (credentialsPath && fs.existsSync(credentialsPath)) {
       args.push('-e', 'ANTHROPIC_API_KEY=');
-      logger.info({ containerName }, 'Cleared ANTHROPIC_API_KEY placeholder — using session credentials');
+      logger.info(
+        { containerName },
+        'Cleared ANTHROPIC_API_KEY placeholder — using session credentials',
+      );
     }
   } else {
     logger.warn(
