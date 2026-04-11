@@ -246,6 +246,7 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
+  credentialsPath?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -260,6 +261,12 @@ async function buildContainerArgs(
   });
   if (onecliApplied) {
     logger.info({ containerName }, 'OneCLI gateway config applied');
+    // If the session has a credentials file, clear the API key placeholder so
+    // Claude Code falls back to OAuth credentials instead of using the placeholder.
+    if (credentialsPath && fs.existsSync(credentialsPath)) {
+      args.push('-e', 'ANTHROPIC_API_KEY=');
+      logger.info({ containerName }, 'Cleared ANTHROPIC_API_KEY placeholder — using session credentials');
+    }
   } else {
     logger.warn(
       { containerName },
@@ -311,10 +318,17 @@ export async function runContainerAgent(
   const agentIdentifier = input.isMain
     ? undefined
     : group.folder.toLowerCase().replace(/_/g, '-');
+  const credentialsPath = path.join(
+    process.cwd(),
+    'data/sessions',
+    group.folder,
+    '.claude/.credentials.json',
+  );
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
     agentIdentifier,
+    credentialsPath,
   );
 
   logger.debug(
