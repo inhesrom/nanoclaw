@@ -28,6 +28,7 @@ Type=oneshot
 ExecStart=%h/clawdir/sync-vaults.sh
 StandardOutput=journal
 StandardError=journal
+TimeoutStartSec=60s
 EOF
 
 # Write timer unit

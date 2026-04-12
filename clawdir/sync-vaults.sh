@@ -7,5 +7,5 @@ VAULTS_DIR="$HOME/clawdir/vaults"
 for vault in "$VAULTS_DIR"/*/; do
   [ -d "$vault" ] || continue
   cd "$vault"
-  ob sync 2>&1 || true
+  timeout 50s ob sync 2>&1 || true
 done
