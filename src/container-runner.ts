@@ -193,7 +193,10 @@ function buildVolumeMounts(
 
   // Idempotently wire caveman SessionStart hook into settings.json
   if (fs.existsSync(hooksDst)) {
-    const activateScript = path.join('/home/node/.claude/hooks', 'caveman-activate.js');
+    const activateScript = path.join(
+      '/home/node/.claude/hooks',
+      'caveman-activate.js',
+    );
     const settingsRaw = fs.readFileSync(settingsFile, 'utf8');
     const settings = JSON.parse(settingsRaw);
     if (!settings.hooks) settings.hooks = {};
