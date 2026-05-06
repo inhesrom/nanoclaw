@@ -4,6 +4,7 @@
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -225,6 +226,22 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Shadow the per-group credentials with the host's copy so the container
+  // always uses fresh OAuth tokens. Read-write so token refreshes propagate
+  // back to the host and stay in sync across sessions.
+  const hostCredentialsPath = path.join(
+    os.homedir(),
+    '.claude',
+    '.credentials.json',
+  );
+  if (fs.existsSync(hostCredentialsPath)) {
+    mounts.push({
+      hostPath: hostCredentialsPath,
+      containerPath: '/home/node/.claude/.credentials.json',
+      readonly: false,
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -362,12 +379,12 @@ export async function runContainerAgent(
   const agentIdentifier = input.isMain
     ? undefined
     : group.folder.toLowerCase().replace(/_/g, '-');
-  const credentialsPath = path.join(
-    process.cwd(),
-    'data/sessions',
-    group.folder,
-    '.claude/.credentials.json',
-  );
+  // Prefer host credentials for the ANTHROPIC_API_KEY clear check — if the
+  // host file exists, it's being mounted into the container and OAuth will work.
+  const hostCredentialsPath = path.join(os.homedir(), '.claude', '.credentials.json');
+  const credentialsPath = fs.existsSync(hostCredentialsPath)
+    ? hostCredentialsPath
+    : path.join(process.cwd(), 'data/sessions', group.folder, '.claude/.credentials.json');
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
