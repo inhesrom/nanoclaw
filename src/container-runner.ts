@@ -381,10 +381,19 @@ export async function runContainerAgent(
     : group.folder.toLowerCase().replace(/_/g, '-');
   // Prefer host credentials for the ANTHROPIC_API_KEY clear check — if the
   // host file exists, it's being mounted into the container and OAuth will work.
-  const hostCredentialsPath = path.join(os.homedir(), '.claude', '.credentials.json');
+  const hostCredentialsPath = path.join(
+    os.homedir(),
+    '.claude',
+    '.credentials.json',
+  );
   const credentialsPath = fs.existsSync(hostCredentialsPath)
     ? hostCredentialsPath
-    : path.join(process.cwd(), 'data/sessions', group.folder, '.claude/.credentials.json');
+    : path.join(
+        process.cwd(),
+        'data/sessions',
+        group.folder,
+        '.claude/.credentials.json',
+      );
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
