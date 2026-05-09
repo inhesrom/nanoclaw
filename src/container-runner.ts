@@ -319,20 +319,17 @@ async function buildContainerArgs(
   });
   if (onecliApplied) {
     logger.info({ containerName }, 'OneCLI gateway config applied');
-    // If the session has a credentials file, clear the API key placeholder so
-    // Claude Code falls back to OAuth credentials instead of using the placeholder.
-    if (credentialsPath && fs.existsSync(credentialsPath)) {
-      args.push('-e', 'ANTHROPIC_API_KEY=');
-      logger.info(
-        { containerName },
-        'Cleared ANTHROPIC_API_KEY placeholder — using session credentials',
-      );
-    }
+    // Do not clear ANTHROPIC_API_KEY — the gateway MITMs outbound requests and
+    // swaps the literal "placeholder" for the real key. Clearing it breaks injection.
   } else {
     logger.warn(
       { containerName },
       'OneCLI gateway not reachable — container will have no credentials',
     );
+    // Only fall back to mounted OAuth credentials when OneCLI is unavailable.
+    if (credentialsPath && fs.existsSync(credentialsPath)) {
+      args.push('-e', 'ANTHROPIC_API_KEY=');
+    }
   }
 
   // Runtime-specific args for host gateway resolution
