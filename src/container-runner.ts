@@ -242,6 +242,23 @@ function buildVolumeMounts(
     });
   }
 
+  // Google Calendar MCP stub OAuth credentials (client keys + tokens.json).
+  // Real tokens are injected by the OneCLI gateway; these are onecli-managed
+  // stub files the gateway recognizes and swaps at request time. Read-write
+  // so token refresh writes from the MCP server persist across runs.
+  const gcalCredsDir = path.join(
+    os.homedir(),
+    '.config',
+    'google-calendar-mcp',
+  );
+  if (fs.existsSync(gcalCredsDir)) {
+    mounts.push({
+      hostPath: gcalCredsDir,
+      containerPath: '/home/node/.config/google-calendar-mcp',
+      readonly: false,
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);

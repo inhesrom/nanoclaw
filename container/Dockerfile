@@ -30,8 +30,11 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser and claude-code globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code
+# Install agent-browser, claude-code, and the Google Calendar MCP globally.
+# Pre-installing the calendar MCP (vs `npx -y` at spawn) is essential: ephemeral
+# containers have no npx cache, so a cold download takes ~16s and races past the
+# Agent SDK's MCP-connection window, leaving the gcal tools unregistered.
+RUN npm install -g agent-browser @anthropic-ai/claude-code @cocal/google-calendar-mcp
 
 # Create app directory
 WORKDIR /app

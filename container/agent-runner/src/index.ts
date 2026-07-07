@@ -469,6 +469,7 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
+        'mcp__gcal__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -482,6 +483,39 @@ async function runQuery(
             NANOCLAW_CHAT_JID: containerInput.chatJid,
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+          },
+        },
+        gcal: {
+          // Pre-installed globally in the image (see container/Dockerfile) so the
+          // server starts instantly. Using `npx -y` here instead cold-downloads
+          // the package on every ephemeral spawn (~16s), which races past the SDK's
+          // MCP-connection window and leaves these tools missing from the toolset.
+          command: 'google-calendar-mcp',
+          args: [],
+          env: {
+            // Inherit the container env so the OneCLI gateway proxy + CA vars
+            // (HTTPS_PROXY, NODE_EXTRA_CA_CERTS, NODE_USE_ENV_PROXY,
+            // SSL_CERT_FILE) reach this MCP subprocess. The MCP stdio transport
+            // otherwise replaces the environment with a small allowlist
+            // (HOME, LOGNAME, PATH, SHELL, TERM, USER), so the Google OAuth
+            // refresh would bypass the gateway and hit real Google with the
+            // stub client_id (invalid_client).
+            ...process.env,
+            // Forwarding the proxy vars is necessary but not sufficient: Node 22's
+            // built-in fetch (used by this MCP's google-auth-library) ignores
+            // NODE_USE_ENV_PROXY (Node 24+ only), so it would still bypass the
+            // gateway. Preload an undici ProxyAgent that installs a global dispatcher
+            // reading HTTPS_PROXY, forcing the OAuth refresh through the gateway.
+            NODE_OPTIONS: [
+              process.env.NODE_OPTIONS,
+              '--import=file:///app/proxy-preload.mjs',
+            ]
+              .filter(Boolean)
+              .join(' '),
+            GOOGLE_OAUTH_CREDENTIALS:
+              '/home/node/.config/google-calendar-mcp/gcp-oauth.keys.json',
+            GOOGLE_CALENDAR_MCP_TOKEN_PATH:
+              '/home/node/.config/google-calendar-mcp/tokens.json',
           },
         },
       },
