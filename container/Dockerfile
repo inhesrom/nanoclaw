@@ -30,11 +30,12 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser, claude-code, and the Google Calendar MCP globally.
-# Pre-installing the calendar MCP (vs `npx -y` at spawn) is essential: ephemeral
-# containers have no npx cache, so a cold download takes ~16s and races past the
-# Agent SDK's MCP-connection window, leaving the gcal tools unregistered.
-RUN npm install -g agent-browser @anthropic-ai/claude-code @cocal/google-calendar-mcp
+# Install agent-browser, claude-code, the Google Calendar MCP, and Codex CLI globally.
+# Pre-installing the calendar MCP (vs `npx -y` at spawn) avoids a ~16s cold download per
+# ephemeral spawn that races past the Agent SDK's MCP-connection window. Codex's --json
+# schema and auth.json were verified against codex-cli 0.142.5 (pin @openai/codex if a
+# future release drifts). The container can run either runtime (NANOCLAW_RUNTIME).
+RUN npm install -g agent-browser @anthropic-ai/claude-code @cocal/google-calendar-mcp @openai/codex
 
 # Create app directory
 WORKDIR /app

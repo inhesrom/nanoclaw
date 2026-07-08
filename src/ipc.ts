@@ -173,6 +173,7 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    runtime?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -461,6 +462,30 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'set_runtime': {
+      // Switch the runtime for the SOURCE group only (verified identity), ignoring
+      // any chatJid the agent supplied. Self-scoped, so no main-only restriction.
+      const runtime = data.runtime;
+      if (runtime === 'claude' || runtime === 'codex') {
+        const entry = Object.entries(registeredGroups).find(
+          ([, g]) => g.folder === sourceGroup,
+        );
+        if (entry) {
+          const [jid, group] = entry;
+          deps.registerGroup(jid, { ...group, runtime });
+          logger.info({ sourceGroup, runtime }, 'Runtime updated for group');
+        } else {
+          logger.warn(
+            { sourceGroup },
+            'set_runtime: source group not registered',
+          );
+        }
+      } else {
+        logger.warn({ runtime, sourceGroup }, 'Invalid set_runtime value');
+      }
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

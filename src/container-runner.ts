@@ -12,6 +12,7 @@ import {
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
   DATA_DIR,
+  DEFAULT_RUNTIME,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   ONECLI_URL,
@@ -27,7 +28,7 @@ import {
 } from './container-runtime.js';
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
-import { RegisteredGroup } from './types.js';
+import { AgentRuntime, RegisteredGroup } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -259,6 +260,25 @@ function buildVolumeMounts(
     });
   }
 
+  // Codex runtime: give the container a per-group CODEX_HOME seeded with the host's
+  // ChatGPT/Codex login. OneCLI injects no LLM credential for Codex, so Codex
+  // authenticates with this auth.json directly (mirrors the Claude .credentials.json
+  // mount). Copied fresh each spawn; rw so token refreshes and session files persist.
+  const runtime = group.runtime ?? DEFAULT_RUNTIME;
+  if (runtime === 'codex') {
+    const codexHome = path.join(DATA_DIR, 'sessions', group.folder, '.codex');
+    fs.mkdirSync(codexHome, { recursive: true });
+    const hostCodexAuth = path.join(os.homedir(), '.codex', 'auth.json');
+    if (fs.existsSync(hostCodexAuth)) {
+      fs.copyFileSync(hostCodexAuth, path.join(codexHome, 'auth.json'));
+    }
+    mounts.push({
+      hostPath: codexHome,
+      containerPath: '/home/node/.codex',
+      readonly: false,
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -320,6 +340,7 @@ function buildVolumeMounts(
 async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  runtime: AgentRuntime,
   agentIdentifier?: string,
   credentialsPath?: string,
 ): Promise<string[]> {
@@ -327,6 +348,15 @@ async function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Select the container agent runtime: 'claude' (Claude Agent SDK) or 'codex'
+  // (OpenAI Codex CLI). The agent-runner branches on this at startup.
+  args.push('-e', `NANOCLAW_RUNTIME=${runtime}`);
+  if (runtime === 'codex') {
+    // Codex reads auth.json / config.toml / sessions from CODEX_HOME, which is the
+    // per-group .codex dir mounted below.
+    args.push('-e', 'CODEX_HOME=/home/node/.codex');
+  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
@@ -408,9 +438,11 @@ export async function runContainerAgent(
         group.folder,
         '.claude/.credentials.json',
       );
+  const runtime = group.runtime ?? DEFAULT_RUNTIME;
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
+    runtime,
     agentIdentifier,
     credentialsPath,
   );

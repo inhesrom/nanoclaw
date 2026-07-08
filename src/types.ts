@@ -32,6 +32,9 @@ export interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }
 
+// Which agent runtime the container runs: the Claude Agent SDK or the OpenAI Codex CLI.
+export type AgentRuntime = 'claude' | 'codex';
+
 export interface RegisteredGroup {
   name: string;
   folder: string;
@@ -40,6 +43,7 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  runtime?: AgentRuntime; // Per-group override; falls back to DEFAULT_RUNTIME (config)
 }
 
 export interface NewMessage {
