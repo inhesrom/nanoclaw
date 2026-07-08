@@ -136,15 +136,12 @@ function runCodexTurn(
   deps: CodexDeps,
 ): Promise<CodexTurnResult> {
   return new Promise((resolve, reject) => {
-    const flags = [
-      '--json',
-      '--skip-git-repo-check',
-      '--sandbox',
-      'danger-full-access',
-    ];
+    // `codex exec resume` rejects --sandbox (it inherits sandbox from config.toml's
+    // sandbox_mode); only a fresh `codex exec` accepts the flag.
+    const base = ['--json', '--skip-git-repo-check'];
     const args = sessionId
-      ? ['exec', 'resume', sessionId, ...flags, prompt]
-      : ['exec', ...flags, prompt];
+      ? ['exec', 'resume', sessionId, ...base, prompt]
+      : ['exec', ...base, '--sandbox', 'danger-full-access', prompt];
 
     // stdin 'ignore' → immediate EOF, so codex doesn't hang "Reading additional
     // input from stdin...". Inherit env (proxy/CA vars + CODEX_HOME).
