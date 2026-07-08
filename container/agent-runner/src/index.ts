@@ -23,6 +23,7 @@ import {
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { runCodexLoop } from './codex-runtime.js';
 
 interface ContainerInput {
   prompt: string;
@@ -677,6 +678,19 @@ async function main(): Promise<void> {
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
+    // Codex runtime: drive the OpenAI Codex CLI instead of the Claude Agent SDK.
+    // Reuses the shared IPC/output primitives so the host is agnostic to runtime.
+    if (process.env.NANOCLAW_RUNTIME === 'codex') {
+      log('Runtime: codex');
+      await runCodexLoop(prompt, sessionId, containerInput, mcpServerPath, {
+        writeOutput,
+        waitForIpcMessage,
+        log,
+      });
+      return;
+    }
+    log('Runtime: claude');
+
     while (true) {
       log(
         `Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`,

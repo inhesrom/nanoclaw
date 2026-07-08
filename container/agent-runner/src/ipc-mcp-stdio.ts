@@ -503,6 +503,35 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+server.tool(
+  'set_runtime',
+  `Switch which agent runtime this chat uses going forward: "claude" (Claude Agent SDK) or "codex" (OpenAI Codex CLI, backed by the ChatGPT/Codex subscription). Call this when the user says things like "use codex from now on", "switch to claude", or "run on codex". Takes effect on the next message (each message spawns a fresh container).`,
+  {
+    runtime: z
+      .enum(['claude', 'codex'])
+      .describe('The runtime to use for this chat going forward'),
+  },
+  async (args) => {
+    const data = {
+      type: 'set_runtime',
+      chatJid,
+      runtime: args.runtime,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Runtime for this chat set to "${args.runtime}". It takes effect on your next message.`,
+        },
+      ],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

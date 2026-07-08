@@ -30,8 +30,11 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser and claude-code globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code
+# Install agent-browser, claude-code, and Codex CLI globally. The container can run
+# either runtime (selected per-message via NANOCLAW_RUNTIME). Codex's --json event
+# schema and auth.json format were verified against codex-cli 0.142.5; pin @openai/codex
+# to a specific version here if a future release drifts.
+RUN npm install -g agent-browser @anthropic-ai/claude-code @openai/codex
 
 # Create app directory
 WORKDIR /app

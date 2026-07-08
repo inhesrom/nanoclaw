@@ -3,6 +3,7 @@ import path from 'path';
 
 import { readEnvFile } from './env.js';
 import { isValidTimezone } from './timezone.js';
+import type { AgentRuntime } from './types.js';
 
 // Read config values from .env (falls back to process.env).
 const envConfig = readEnvFile([
@@ -10,6 +11,7 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'ONECLI_URL',
   'TZ',
+  'NANOCLAW_RUNTIME',
 ]);
 
 export const ASSISTANT_NAME =
@@ -52,6 +54,18 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
   10,
 ); // 10MB default
 export const ONECLI_URL = process.env.ONECLI_URL || envConfig.ONECLI_URL;
+
+// Default agent runtime for containers: 'claude' (Claude Agent SDK) or 'codex'
+// (OpenAI Codex CLI). Per-group overrides live in registered_groups.runtime and are
+// set at runtime via the set_runtime tool ("use codex/claude from now on").
+export const DEFAULT_RUNTIME: AgentRuntime =
+  (
+    process.env.NANOCLAW_RUNTIME ||
+    envConfig.NANOCLAW_RUNTIME ||
+    ''
+  ).toLowerCase() === 'claude'
+    ? 'claude'
+    : 'codex';
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,
