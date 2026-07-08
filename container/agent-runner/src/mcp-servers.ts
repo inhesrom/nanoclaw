@@ -103,17 +103,21 @@ export const MCP_SERVERS: McpServerDef[] = [
     credentialCheckPath: '/home/node/.gmail-mcp/gcp-oauth.keys.json',
   },
   {
-    // Google Sheets (google-sheets-mcp, domdomegg). Stdio mode takes a raw bearer
-    // token env — no OAuth client, no token files, no refresh. The placeholder is
-    // swapped by the gateway at sheets.googleapis.com. Uses native fetch → preload.
+    // Google Sheets (google-sheets-mcp, domdomegg) via a token-refresh launcher.
+    // Sheets deliberately BYPASSES the gateway: OneCLI's sheets provider can only
+    // grant drive.file/drive.readonly (no full `spreadsheets` write scope), so
+    // writes to existing sheets 403. The launcher refreshes a real access token
+    // from the user's own OAuth creds (ro-mounted) and talks to Google directly —
+    // hence proxyEnv/nodePreload are OFF on purpose.
     name: 'sheets',
-    command: 'google-sheets-mcp',
-    args: [],
+    command: 'node',
+    args: ['/app/sheets-mcp-launcher.mjs'],
     env: {
-      GOOGLE_ACCESS_TOKEN: 'onecli-managed',
+      SHEETS_CREDENTIALS: '/home/node/.config/nanoclaw-sheets/credentials.json',
     },
-    proxyEnv: true,
-    nodePreload: true,
+    proxyEnv: false,
+    nodePreload: false,
+    credentialCheckPath: '/home/node/.config/nanoclaw-sheets/credentials.json',
   },
 ];
 

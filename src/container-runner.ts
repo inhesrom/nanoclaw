@@ -272,6 +272,20 @@ function buildVolumeMounts(
     });
   }
 
+  // Google Sheets REAL OAuth credentials (client id/secret + refresh token, created
+  // by scripts/sheets-oauth-setup.mjs). Unlike the other services, sheets bypasses
+  // the OneCLI gateway — its provider can't grant the full `spreadsheets` write
+  // scope — so the MCP launcher refreshes and uses these directly. Read-only: the
+  // refresh token is long-lived and nothing needs to write back.
+  const sheetsCredsDir = path.join(os.homedir(), '.config', 'nanoclaw-sheets');
+  if (fs.existsSync(sheetsCredsDir)) {
+    mounts.push({
+      hostPath: sheetsCredsDir,
+      containerPath: '/home/node/.config/nanoclaw-sheets',
+      readonly: true,
+    });
+  }
+
   // Codex runtime: give the container a per-group CODEX_HOME seeded with the host's
   // ChatGPT/Codex login. OneCLI injects no LLM credential for Codex, so Codex
   // authenticates with this auth.json directly (mirrors the Claude .credentials.json
