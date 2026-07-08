@@ -24,6 +24,10 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 import { runCodexLoop } from './codex-runtime.js';
+import {
+  allowedMcpToolPatterns,
+  buildClaudeMcpServers,
+} from './mcp-servers.js';
 
 interface ContainerInput {
   prompt: string;
@@ -470,7 +474,9 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        'mcp__gcal__*',
+        // External tool servers (gcal, github, gmail, sheets) — one pattern per
+        // active server, defined once in mcp-servers.ts for both runtimes.
+        ...allowedMcpToolPatterns(),
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -486,39 +492,12 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
-        gcal: {
-          // Pre-installed globally in the image (see container/Dockerfile) so the
-          // server starts instantly. Using `npx -y` here instead cold-downloads
-          // the package on every ephemeral spawn (~16s), which races past the SDK's
-          // MCP-connection window and leaves these tools missing from the toolset.
-          command: 'google-calendar-mcp',
-          args: [],
-          env: {
-            // Inherit the container env so the OneCLI gateway proxy + CA vars
-            // (HTTPS_PROXY, NODE_EXTRA_CA_CERTS, NODE_USE_ENV_PROXY,
-            // SSL_CERT_FILE) reach this MCP subprocess. The MCP stdio transport
-            // otherwise replaces the environment with a small allowlist
-            // (HOME, LOGNAME, PATH, SHELL, TERM, USER), so the Google OAuth
-            // refresh would bypass the gateway and hit real Google with the
-            // stub client_id (invalid_client).
-            ...process.env,
-            // Forwarding the proxy vars is necessary but not sufficient: Node 22's
-            // built-in fetch (used by this MCP's google-auth-library) ignores
-            // NODE_USE_ENV_PROXY (Node 24+ only), so it would still bypass the
-            // gateway. Preload an undici ProxyAgent that installs a global dispatcher
-            // reading HTTPS_PROXY, forcing the OAuth refresh through the gateway.
-            NODE_OPTIONS: [
-              process.env.NODE_OPTIONS,
-              '--import=file:///app/proxy-preload.mjs',
-            ]
-              .filter(Boolean)
-              .join(' '),
-            GOOGLE_OAUTH_CREDENTIALS:
-              '/home/node/.config/google-calendar-mcp/gcp-oauth.keys.json',
-            GOOGLE_CALENDAR_MCP_TOKEN_PATH:
-              '/home/node/.config/google-calendar-mcp/tokens.json',
-          },
-        },
+        // External tool servers, shared with the Codex runtime (see
+        // mcp-servers.ts for the full credential/proxy model). Binaries are
+        // pre-installed globally in the image so servers start instantly —
+        // `npx -y` would cold-download ~16s per ephemeral spawn and race past
+        // the SDK's MCP-connection window.
+        ...buildClaudeMcpServers(),
       },
       hooks: {
         PreCompact: [

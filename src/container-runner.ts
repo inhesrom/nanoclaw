@@ -260,6 +260,18 @@ function buildVolumeMounts(
     });
   }
 
+  // Gmail MCP credentials (same gateway-stub model as gcal: credentials.json holds
+  // an onecli-managed token with far-future expiry so the server never refreshes;
+  // the gateway injects real credentials at gmail.googleapis.com).
+  const gmailCredsDir = path.join(os.homedir(), '.gmail-mcp');
+  if (fs.existsSync(gmailCredsDir)) {
+    mounts.push({
+      hostPath: gmailCredsDir,
+      containerPath: '/home/node/.gmail-mcp',
+      readonly: false,
+    });
+  }
+
   // Codex runtime: give the container a per-group CODEX_HOME seeded with the host's
   // ChatGPT/Codex login. OneCLI injects no LLM credential for Codex, so Codex
   // authenticates with this auth.json directly (mirrors the Claude .credentials.json

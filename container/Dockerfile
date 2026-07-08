@@ -30,12 +30,23 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser, claude-code, the Google Calendar MCP, and Codex CLI globally.
-# Pre-installing the calendar MCP (vs `npx -y` at spawn) avoids a ~16s cold download per
-# ephemeral spawn that races past the Agent SDK's MCP-connection window. Codex's --json
-# schema and auth.json were verified against codex-cli 0.142.5 (pin @openai/codex if a
-# future release drifts). The container can run either runtime (NANOCLAW_RUNTIME).
-RUN npm install -g agent-browser @anthropic-ai/claude-code @cocal/google-calendar-mcp @openai/codex
+# Install agent-browser, claude-code, the MCP tool servers (Calendar, Gmail, Sheets),
+# and Codex CLI globally. Pre-installing MCPs (vs `npx -y` at spawn) avoids a ~16s cold
+# download per ephemeral spawn that races past the Agent SDK's MCP-connection window.
+# Codex's --json schema and auth.json were verified against codex-cli 0.142.5 (pin
+# @openai/codex if a future release drifts). Either runtime runs (NANOCLAW_RUNTIME).
+RUN npm install -g agent-browser @anthropic-ai/claude-code @cocal/google-calendar-mcp @gongrzhe/server-gmail-autoauth-mcp google-sheets-mcp @openai/codex
+
+# GitHub official MCP server (Go binary; token-based auth — the onecli-managed
+# placeholder PAT is swapped by the credential gateway at api.github.com).
+RUN arch="$(uname -m)" && case "$arch" in \
+      aarch64|arm64) asset=Linux_arm64 ;; \
+      x86_64) asset=Linux_x86_64 ;; \
+      *) echo "unsupported arch: $arch" && exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/github/github-mcp-server/releases/download/v1.5.0/github-mcp-server_${asset}.tar.gz" \
+       | tar -xz -C /usr/local/bin github-mcp-server \
+    && chmod +x /usr/local/bin/github-mcp-server
 
 # Create app directory
 WORKDIR /app

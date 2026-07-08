@@ -16,6 +16,7 @@
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
+import { buildCodexMcpConfigToml, toml } from './mcp-servers.js';
 
 interface ContainerOutput {
   status: 'success' | 'error';
@@ -39,14 +40,12 @@ interface CodexContainerInput {
 const CODEX_HOME = process.env.CODEX_HOME || '/home/node/.codex';
 const WORKDIR = '/workspace/group';
 
-/** JSON.stringify doubles as a valid TOML basic-string encoder for our values. */
-function toml(value: string): string {
-  return JSON.stringify(value);
-}
-
 /**
- * Write ~/.codex/config.toml wiring the same stdio MCP server(s) the Claude path
+ * Write ~/.codex/config.toml wiring the same stdio MCP servers the Claude path
  * uses, and disabling Codex's own sandbox/approvals (the container already isolates).
+ * External tool servers (gcal, github, gmail, sheets) come from the shared
+ * definitions in mcp-servers.ts; Codex does NOT pass the parent env to MCP
+ * subprocesses, so the builder enumerates the gateway proxy/CA vars explicitly.
  */
 function writeCodexConfig(
   mcpServerPath: string,
@@ -67,37 +66,7 @@ NANOCLAW_GROUP_FOLDER = ${toml(input.groupFolder)}
 NANOCLAW_IS_MAIN = ${toml(input.isMain ? '1' : '0')}
 `;
 
-  // Google Calendar MCP — only when its stub creds are mounted. Codex does NOT pass
-  // the parent env to MCP subprocesses, so the OneCLI gateway proxy/CA vars must be
-  // listed explicitly here (unlike the Claude path's `...process.env`); otherwise the
-  // Google OAuth refresh bypasses the gateway and fails with invalid_client. The
-  // undici proxy-preload forces Node 22's fetch through the gateway.
-  const gcalCreds = '/home/node/.config/google-calendar-mcp/gcp-oauth.keys.json';
-  if (fs.existsSync(gcalCreds)) {
-    const gcalEnv: Record<string, string> = {
-      NODE_OPTIONS: '--import=file:///app/proxy-preload.mjs',
-      GOOGLE_OAUTH_CREDENTIALS: gcalCreds,
-      GOOGLE_CALENDAR_MCP_TOKEN_PATH:
-        '/home/node/.config/google-calendar-mcp/tokens.json',
-    };
-    for (const key of [
-      'HTTPS_PROXY',
-      'HTTP_PROXY',
-      'https_proxy',
-      'http_proxy',
-      'NODE_EXTRA_CA_CERTS',
-      'SSL_CERT_FILE',
-      'NO_PROXY',
-      'no_proxy',
-    ]) {
-      const v = process.env[key];
-      if (v) gcalEnv[key] = v;
-    }
-    config += `\n[mcp_servers.gcal]\ncommand = "google-calendar-mcp"\n\n[mcp_servers.gcal.env]\n`;
-    for (const [k, v] of Object.entries(gcalEnv)) {
-      config += `${k} = ${toml(v)}\n`;
-    }
-  }
+  config += buildCodexMcpConfigToml();
 
   fs.writeFileSync(path.join(CODEX_HOME, 'config.toml'), config);
 }
