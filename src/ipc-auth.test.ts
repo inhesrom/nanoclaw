@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
   _initTestDatabase,
   createTask,
+  getAgentDefaultSettings,
   getAllTasks,
   getRegisteredGroup,
   getTaskById,
@@ -36,6 +37,7 @@ const THIRD_GROUP: RegisteredGroup = {
 
 let groups: Record<string, RegisteredGroup>;
 let deps: IpcDeps;
+let closeGroup: ReturnType<typeof vi.fn<(groupFolder: string) => void>>;
 
 beforeEach(() => {
   _initTestDatabase();
@@ -51,6 +53,7 @@ beforeEach(() => {
   setRegisteredGroup('other@g.us', OTHER_GROUP);
   setRegisteredGroup('third@g.us', THIRD_GROUP);
 
+  closeGroup = vi.fn<(groupFolder: string) => void>();
   deps = {
     sendMessage: async () => {},
     registeredGroups: () => groups,
@@ -63,6 +66,8 @@ beforeEach(() => {
     getAvailableGroups: () => [],
     writeGroupsSnapshot: () => {},
     onTasksChanged: () => {},
+    onAgentSettingsChanged: () => {},
+    closeGroup,
   };
 });
 
@@ -675,5 +680,107 @@ describe('register_group success', () => {
     );
 
     expect(getRegisteredGroup('partial@g.us')).toBeUndefined();
+  });
+});
+
+// --- agent settings authorization and validation ---
+
+describe('agent settings IPC', () => {
+  it('non-main group can set its own chat model override', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_agent_model',
+        provider: 'claude',
+        scope: 'chat',
+        model: 'claude-opus-4-6',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(getRegisteredGroup('other@g.us')!.agentSettings?.claude?.model).toBe(
+      'claude-opus-4-6',
+    );
+    expect(closeGroup).toHaveBeenCalledWith('other-group');
+  });
+
+  it('non-main group cannot set global model defaults', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_agent_model',
+        provider: 'codex',
+        scope: 'default',
+        model: 'gpt-5-codex',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(getAgentDefaultSettings().codex?.model).toBeUndefined();
+  });
+
+  it('main group can set global provider reasoning defaults', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_reasoning_effort',
+        provider: 'codex',
+        scope: 'default',
+        effort: 'xhigh',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(getAgentDefaultSettings().codex?.reasoningEffort).toBe('xhigh');
+  });
+
+  it('rejects invalid provider-specific reasoning effort', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_reasoning_effort',
+        provider: 'claude',
+        scope: 'chat',
+        effort: 'xhigh',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(
+      getRegisteredGroup('other@g.us')!.agentSettings?.claude?.reasoningEffort,
+    ).toBeUndefined();
+  });
+
+  it('auto clears a chat override', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_reasoning_effort',
+        provider: 'claude',
+        scope: 'chat',
+        effort: 'high',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+    await processTaskIpc(
+      {
+        type: 'set_reasoning_effort',
+        provider: 'claude',
+        scope: 'chat',
+        effort: 'auto',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(
+      getRegisteredGroup('other@g.us')!.agentSettings?.claude?.reasoningEffort,
+    ).toBeUndefined();
   });
 });

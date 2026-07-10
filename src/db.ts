@@ -3,10 +3,16 @@ import fs from 'fs';
 import path from 'path';
 
 import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
+import {
+  AGENT_DEFAULTS_STATE_KEY,
+  normalizeAgentSettings,
+  pruneAgentSettings,
+} from './agent-settings.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
   AgentRuntime,
+  AgentSettings,
   NewMessage,
   RegisteredGroup,
   ScheduledTask,
@@ -130,6 +136,15 @@ function createSchema(database: Database.Database): void {
   // Add runtime column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE registered_groups ADD COLUMN runtime TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
+  // Add agent_settings column if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN agent_settings TEXT`,
+    );
   } catch {
     /* column already exists */
   }
@@ -622,10 +637,21 @@ interface RegisteredGroupRow {
   requires_trigger: number | null;
   is_main: number | null;
   runtime: string | null;
+  agent_settings: string | null;
 }
 
 function parseRuntime(v: string | null): AgentRuntime | undefined {
   return v === 'codex' || v === 'claude' ? v : undefined;
+}
+
+function parseAgentSettings(v: string | null): AgentSettings | undefined {
+  if (!v) return undefined;
+  try {
+    const settings = normalizeAgentSettings(JSON.parse(v));
+    return Object.keys(settings).length > 0 ? settings : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function rowToGroup(row: RegisteredGroupRow): RegisteredGroup {
@@ -641,6 +667,7 @@ function rowToGroup(row: RegisteredGroupRow): RegisteredGroup {
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
     runtime: parseRuntime(row.runtime),
+    agentSettings: parseAgentSettings(row.agent_settings),
   };
 }
 
@@ -665,9 +692,10 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
   if (!isValidGroupFolder(group.folder)) {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
+  const agentSettings = pruneAgentSettings(group.agentSettings ?? {});
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, runtime)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, runtime, agent_settings)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -678,6 +706,9 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
     group.runtime ?? null,
+    Object.keys(agentSettings).length > 0
+      ? JSON.stringify(agentSettings)
+      : null,
   );
 }
 
@@ -697,6 +728,22 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     result[row.jid] = rowToGroup(row);
   }
   return result;
+}
+
+export function getAgentDefaultSettings(): AgentSettings {
+  const raw = getRouterState(AGENT_DEFAULTS_STATE_KEY);
+  if (!raw) return {};
+  try {
+    return normalizeAgentSettings(JSON.parse(raw));
+  } catch {
+    logger.warn('Corrupted agent default settings in DB, ignoring');
+    return {};
+  }
+}
+
+export function setAgentDefaultSettings(settings: AgentSettings): void {
+  const pruned = pruneAgentSettings(settings);
+  setRouterState(AGENT_DEFAULTS_STATE_KEY, JSON.stringify(pruned));
 }
 
 // --- JSON migration ---

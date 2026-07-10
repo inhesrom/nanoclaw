@@ -2,13 +2,24 @@ import { ChildProcess } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
-import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  ASSISTANT_NAME,
+  DEFAULT_RUNTIME,
+  SCHEDULER_POLL_INTERVAL,
+  TIMEZONE,
+} from './config.js';
+import {
+  buildAgentSettingsSnapshot,
+  resolveRuntimeAgentSettings,
+} from './agent-settings.js';
 import {
   ContainerOutput,
   runContainerAgent,
+  writeAgentSettingsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
 import {
+  getAgentDefaultSettings,
   getAllTasks,
   getDueTasks,
   getTaskById,
@@ -154,6 +165,22 @@ async function runTask(
   const sessions = deps.getSessions();
   const sessionId =
     task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
+  const runtime = group.runtime ?? DEFAULT_RUNTIME;
+  const agentDefaults = getAgentDefaultSettings();
+  const agentSettings = resolveRuntimeAgentSettings(
+    runtime,
+    group.agentSettings,
+    agentDefaults,
+  );
+  writeAgentSettingsSnapshot(
+    task.group_folder,
+    buildAgentSettingsSnapshot(
+      group.agentSettings,
+      agentDefaults,
+      runtime,
+      isMain,
+    ),
+  );
 
   // After the task produces a result, close the container promptly.
   // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the
@@ -181,6 +208,7 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
         script: task.script || undefined,
+        agentSettings,
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),

@@ -64,4 +64,67 @@ describe('database migrations', () => {
       process.chdir(repoRoot);
     }
   });
+
+  it('adds agent_settings to legacy registered groups', async () => {
+    const repoRoot = process.cwd();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-db-test-'));
+
+    try {
+      process.chdir(tempDir);
+      fs.mkdirSync(path.join(tempDir, 'store'), { recursive: true });
+
+      const dbPath = path.join(tempDir, 'store', 'messages.db');
+      const legacyDb = new Database(dbPath);
+      legacyDb.exec(`
+        CREATE TABLE registered_groups (
+          jid TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          folder TEXT NOT NULL UNIQUE,
+          trigger_pattern TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          container_config TEXT,
+          requires_trigger INTEGER DEFAULT 1
+        );
+      `);
+      legacyDb
+        .prepare(
+          `INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          'room@g.us',
+          'Room',
+          'whatsapp_room',
+          '@Andy',
+          '2024-01-01T00:00:00.000Z',
+          1,
+        );
+      legacyDb.close();
+
+      vi.resetModules();
+      const {
+        initDatabase,
+        getRegisteredGroup,
+        setRegisteredGroup,
+        _closeDatabase,
+      } = await import('./db.js');
+
+      initDatabase();
+      const group = getRegisteredGroup('room@g.us')!;
+      setRegisteredGroup('room@g.us', {
+        ...group,
+        agentSettings: {
+          claude: { model: 'claude-opus-4-6' },
+        },
+      });
+
+      expect(getRegisteredGroup('room@g.us')!.agentSettings).toEqual({
+        claude: { model: 'claude-opus-4-6' },
+      });
+
+      _closeDatabase();
+    } finally {
+      process.chdir(repoRoot);
+    }
+  });
 });

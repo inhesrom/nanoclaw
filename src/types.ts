@@ -34,6 +34,44 @@ export interface ContainerConfig {
 
 // Which agent runtime the container runs: the Claude Agent SDK or the OpenAI Codex CLI.
 export type AgentRuntime = 'claude' | 'codex';
+export type AgentProvider = AgentRuntime;
+
+export type AgentSettingSource = 'chat' | 'default' | 'provider';
+
+export interface ProviderAgentSettings {
+  model?: string;
+  reasoningEffort?: string;
+}
+
+export type AgentSettings = Partial<
+  Record<AgentProvider, ProviderAgentSettings>
+>;
+
+export interface RuntimeAgentSettings {
+  model?: string;
+  reasoningEffort?: string;
+}
+
+export interface AgentSettingValueSnapshot {
+  effective: string | null;
+  source: AgentSettingSource;
+  chatOverride: string | null;
+  defaultValue: string | null;
+}
+
+export interface ProviderAgentSettingsSnapshot {
+  model: AgentSettingValueSnapshot;
+  reasoningEffort: AgentSettingValueSnapshot;
+  modelOptions: string[];
+  reasoningEffortOptions: string[];
+  customModelAllowed: boolean;
+}
+
+export interface AgentSettingsSnapshot {
+  currentRuntime: AgentRuntime;
+  canSetDefaults: boolean;
+  providers: Record<AgentProvider, ProviderAgentSettingsSnapshot>;
+}
 
 export interface RegisteredGroup {
   name: string;
@@ -44,6 +82,7 @@ export interface RegisteredGroup {
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
   runtime?: AgentRuntime; // Per-group override; falls back to DEFAULT_RUNTIME (config)
+  agentSettings?: AgentSettings; // Per-chat provider overrides; global defaults live in router_state
 }
 
 export interface NewMessage {

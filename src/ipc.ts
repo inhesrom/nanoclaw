@@ -3,12 +3,30 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  DATA_DIR,
+  DEFAULT_RUNTIME,
+  IPC_POLL_INTERVAL,
+  TIMEZONE,
+} from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import {
+  createTask,
+  deleteTask,
+  getAgentDefaultSettings,
+  getTaskById,
+  setAgentDefaultSettings,
+  updateTask,
+} from './db.js';
+import {
+  normalizeProvider,
+  updateProviderAgentSettings,
+  validateModelSlug,
+  validateReasoningEffort,
+} from './agent-settings.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { AgentProvider, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -23,6 +41,8 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+  onAgentSettingsChanged?: () => void;
+  closeGroup?: (groupFolder: string) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -174,12 +194,41 @@ export async function processTaskIpc(
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
     runtime?: string;
+    // For set_agent_model / set_reasoning_effort
+    provider?: string;
+    scope?: string;
+    model?: string;
+    effort?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
   deps: IpcDeps,
 ): Promise<void> {
   const registeredGroups = deps.registeredGroups();
+
+  const sourceEntry = Object.entries(registeredGroups).find(
+    ([, group]) => group.folder === sourceGroup,
+  );
+  const sourceRuntime = sourceEntry?.[1].runtime ?? DEFAULT_RUNTIME;
+  const resolveRequestedProvider = (): AgentProvider | undefined => {
+    if (data.provider === 'current') return sourceRuntime;
+    return normalizeProvider(data.provider);
+  };
+  const closeSettingsGroups = (
+    scope: 'chat' | 'default',
+    provider: AgentProvider,
+  ): void => {
+    if (scope === 'chat') {
+      deps.closeGroup?.(sourceGroup);
+      return;
+    }
+
+    for (const group of Object.values(registeredGroups)) {
+      if ((group.runtime ?? DEFAULT_RUNTIME) === provider) {
+        deps.closeGroup?.(group.folder);
+      }
+    }
+  };
 
   switch (data.type) {
     case 'schedule_task':
@@ -454,6 +503,8 @@ export async function processTaskIpc(
           containerConfig: data.containerConfig,
           requiresTrigger: data.requiresTrigger,
           isMain: existingGroup?.isMain,
+          runtime: existingGroup?.runtime,
+          agentSettings: existingGroup?.agentSettings,
         });
       } else {
         logger.warn(
@@ -484,6 +535,139 @@ export async function processTaskIpc(
       } else {
         logger.warn({ runtime, sourceGroup }, 'Invalid set_runtime value');
       }
+      break;
+    }
+
+    case 'set_agent_model': {
+      const provider = resolveRequestedProvider();
+      const scope = data.scope === 'default' ? 'default' : 'chat';
+      const rawModel = typeof data.model === 'string' ? data.model.trim() : '';
+      const model = rawModel.toLowerCase() === 'auto' ? null : rawModel;
+
+      if (!provider) {
+        logger.warn(
+          { provider: data.provider, sourceGroup },
+          'Invalid model provider',
+        );
+        break;
+      }
+      if (scope === 'default' && !isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized model default update blocked',
+        );
+        break;
+      }
+      if (model !== null && !validateModelSlug(model)) {
+        logger.warn({ provider, model, sourceGroup }, 'Invalid model slug');
+        break;
+      }
+
+      if (scope === 'default') {
+        const defaults = updateProviderAgentSettings(
+          getAgentDefaultSettings(),
+          provider,
+          { model },
+        );
+        setAgentDefaultSettings(defaults);
+        logger.info(
+          { sourceGroup, provider, model },
+          'Agent model default updated',
+        );
+      } else if (sourceEntry) {
+        const [jid, group] = sourceEntry;
+        deps.registerGroup(jid, {
+          ...group,
+          agentSettings: updateProviderAgentSettings(
+            group.agentSettings,
+            provider,
+            { model },
+          ),
+        });
+        logger.info(
+          { sourceGroup, provider, model },
+          'Agent model override updated',
+        );
+      } else {
+        logger.warn(
+          { sourceGroup },
+          'set_agent_model: source group not registered',
+        );
+        break;
+      }
+
+      deps.onAgentSettingsChanged?.();
+      closeSettingsGroups(scope, provider);
+      break;
+    }
+
+    case 'set_reasoning_effort': {
+      const provider = resolveRequestedProvider();
+      const scope = data.scope === 'default' ? 'default' : 'chat';
+      const rawEffort =
+        typeof data.effort === 'string' ? data.effort.trim().toLowerCase() : '';
+      const reasoningEffort = rawEffort === 'auto' ? null : rawEffort;
+
+      if (!provider) {
+        logger.warn(
+          { provider: data.provider, sourceGroup },
+          'Invalid reasoning provider',
+        );
+        break;
+      }
+      if (scope === 'default' && !isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized reasoning default update blocked',
+        );
+        break;
+      }
+      if (
+        reasoningEffort !== null &&
+        !validateReasoningEffort(provider, reasoningEffort)
+      ) {
+        logger.warn(
+          { provider, effort: reasoningEffort, sourceGroup },
+          'Invalid reasoning effort',
+        );
+        break;
+      }
+
+      if (scope === 'default') {
+        const defaults = updateProviderAgentSettings(
+          getAgentDefaultSettings(),
+          provider,
+          { reasoningEffort },
+        );
+        setAgentDefaultSettings(defaults);
+        logger.info(
+          { sourceGroup, provider, reasoningEffort },
+          'Reasoning effort default updated',
+        );
+      } else if (sourceEntry) {
+        const [jid, group] = sourceEntry;
+        deps.registerGroup(jid, {
+          ...group,
+          agentSettings: updateProviderAgentSettings(
+            group.agentSettings,
+            provider,
+            { reasoningEffort },
+          ),
+        });
+        logger.info(
+          { sourceGroup, provider, reasoningEffort },
+          'Reasoning effort override updated',
+        );
+      } else {
+        logger.warn(
+          { sourceGroup },
+          'set_reasoning_effort: source group not registered',
+        );
+        break;
+      }
+
+      deps.onAgentSettingsChanged?.();
+      closeSettingsGroups(scope, provider);
       break;
     }
 

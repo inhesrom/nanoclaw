@@ -5,6 +5,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 
 import {
   ASSISTANT_NAME,
+  DEFAULT_RUNTIME,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
@@ -22,6 +23,7 @@ import {
 import {
   ContainerOutput,
   runContainerAgent,
+  writeAgentSettingsSnapshot,
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
@@ -33,6 +35,7 @@ import {
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
+  getAgentDefaultSettings,
   deleteSession,
   getAllTasks,
   getLastBotMessageTimestamp,
@@ -46,6 +49,10 @@ import {
   storeChatMetadata,
   storeMessage,
 } from './db.js';
+import {
+  buildAgentSettingsSnapshot,
+  resolveRuntimeAgentSettings,
+} from './agent-settings.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
@@ -187,6 +194,26 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     { jid, name: group.name, folder: group.folder },
     'Group registered',
   );
+}
+
+function refreshAgentSettingsSnapshot(group: RegisteredGroup): void {
+  const runtime = group.runtime ?? DEFAULT_RUNTIME;
+  const defaults = getAgentDefaultSettings();
+  writeAgentSettingsSnapshot(
+    group.folder,
+    buildAgentSettingsSnapshot(
+      group.agentSettings,
+      defaults,
+      runtime,
+      group.isMain === true,
+    ),
+  );
+}
+
+function refreshAllAgentSettingsSnapshots(): void {
+  for (const group of Object.values(registeredGroups)) {
+    refreshAgentSettingsSnapshot(group);
+  }
 }
 
 /**
@@ -344,6 +371,22 @@ async function runAgent(
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
+  const runtime = group.runtime ?? DEFAULT_RUNTIME;
+  const agentDefaults = getAgentDefaultSettings();
+  const agentSettings = resolveRuntimeAgentSettings(
+    runtime,
+    group.agentSettings,
+    agentDefaults,
+  );
+  writeAgentSettingsSnapshot(
+    group.folder,
+    buildAgentSettingsSnapshot(
+      group.agentSettings,
+      agentDefaults,
+      runtime,
+      isMain,
+    ),
+  );
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -392,6 +435,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        agentSettings,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -745,6 +789,13 @@ async function main(): Promise<void> {
       for (const group of Object.values(registeredGroups)) {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
+    },
+    onAgentSettingsChanged: refreshAllAgentSettingsSnapshots,
+    closeGroup: (groupFolder) => {
+      const entry = Object.entries(registeredGroups).find(
+        ([, group]) => group.folder === groupFolder,
+      );
+      if (entry) queue.closeStdin(entry[0]);
     },
   });
   startSessionCleanup();

@@ -14,6 +14,35 @@ import { CronExpressionParser } from 'cron-parser';
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
+const AGENT_SETTINGS_FILE = path.join(IPC_DIR, 'agent_settings.json');
+
+const MODEL_SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,119}$/;
+const CLAUDE_REASONING_EFFORTS = ['low', 'medium', 'high', 'max'];
+const CODEX_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+
+type Provider = 'claude' | 'codex';
+type ProviderArg = Provider | 'current';
+
+interface SettingSnapshot {
+  effective: string | null;
+  source: string;
+  chatOverride: string | null;
+  defaultValue: string | null;
+}
+
+interface ProviderSnapshot {
+  model: SettingSnapshot;
+  reasoningEffort: SettingSnapshot;
+  modelOptions: string[];
+  reasoningEffortOptions: string[];
+  customModelAllowed: boolean;
+}
+
+interface AgentSettingsSnapshot {
+  currentRuntime: Provider;
+  canSetDefaults: boolean;
+  providers: Record<Provider, ProviderSnapshot>;
+}
 
 // Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
@@ -32,6 +61,61 @@ function writeIpcFile(dir: string, data: object): string {
   fs.renameSync(tempPath, filepath);
 
   return filename;
+}
+
+function readAgentSettingsSnapshot(): AgentSettingsSnapshot | null {
+  try {
+    if (!fs.existsSync(AGENT_SETTINGS_FILE)) return null;
+    return JSON.parse(
+      fs.readFileSync(AGENT_SETTINGS_FILE, 'utf-8'),
+    ) as AgentSettingsSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+function resolvedProvider(provider: ProviderArg): Provider | null {
+  if (provider !== 'current') return provider;
+  return readAgentSettingsSnapshot()?.currentRuntime ?? null;
+}
+
+function formatSetting(setting: SettingSnapshot): string {
+  const effective = setting.effective ?? 'auto/provider default';
+  const chat = setting.chatOverride ?? 'none';
+  const defaultValue = setting.defaultValue ?? 'none';
+  return `${effective} (${setting.source}; chat=${chat}, default=${defaultValue})`;
+}
+
+function formatAgentSettings(snapshot: AgentSettingsSnapshot): string {
+  const lines = [
+    `Current runtime: ${snapshot.currentRuntime}`,
+    `Can change global defaults: ${snapshot.canSetDefaults ? 'yes' : 'no'}`,
+    '',
+  ];
+
+  for (const provider of ['claude', 'codex'] as Provider[]) {
+    const settings = snapshot.providers[provider];
+    lines.push(`${provider}:`);
+    lines.push(`- model: ${formatSetting(settings.model)}`);
+    lines.push(
+      `- reasoning effort: ${formatSetting(settings.reasoningEffort)}`,
+    );
+    lines.push(
+      `- model examples: ${settings.modelOptions.join(', ')}${settings.customModelAllowed ? ' (custom slugs allowed)' : ''}`,
+    );
+    lines.push(
+      `- reasoning effort options: ${settings.reasoningEffortOptions.join(', ')}`,
+    );
+    lines.push('');
+  }
+
+  return lines.join('\n').trim();
+}
+
+function validReasoningEffort(provider: Provider, effort: string): boolean {
+  return (
+    provider === 'claude' ? CLAUDE_REASONING_EFFORTS : CODEX_REASONING_EFFORTS
+  ).includes(effort);
 }
 
 const server = new McpServer({
@@ -526,6 +610,172 @@ server.tool(
         {
           type: 'text' as const,
           text: `Runtime for this chat set to "${args.runtime}". It takes effect on your next message.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'get_agent_settings',
+  `List the current runtime, model, reasoning/thinking effort, global defaults, per-chat overrides, and valid options for Claude and Codex. Call this when the user asks what model/reasoning mode is active or asks to see model/thinking options.`,
+  {},
+  async () => {
+    const snapshot = readAgentSettingsSnapshot();
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: snapshot
+            ? formatAgentSettings(snapshot)
+            : 'Agent settings snapshot is not available yet. Try again on the next message.',
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'set_agent_model',
+  `Change the model used by this chat or, from the main chat only, the global default for a provider. Use scope "chat" for the current chat override and scope "default" for the provider default used by chats without an override. Use provider "current" unless the user specifically names Claude or Codex. Use model "auto" to clear the override/default and return to the next fallback.`,
+  {
+    scope: z
+      .enum(['chat', 'default'])
+      .describe(
+        'Whether to change this chat override or a global provider default',
+      ),
+    provider: z
+      .enum(['current', 'claude', 'codex'])
+      .describe('Provider to change; use current unless user names a provider'),
+    model: z
+      .string()
+      .describe(
+        'Model slug to use, such as claude-sonnet-4-6 or gpt-5-codex. Use "auto" to clear.',
+      ),
+  },
+  async (args) => {
+    const model = args.model.trim();
+
+    if (args.scope === 'default' && !isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main chat can change global model defaults.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (model.toLowerCase() !== 'auto' && !MODEL_SLUG_PATTERN.test(model)) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Invalid model slug. Use letters, numbers, dot, dash, underscore, colon, slash, or plus; no spaces.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'set_agent_model',
+      chatJid,
+      provider: args.provider,
+      scope: args.scope,
+      model,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Model ${args.scope === 'default' ? 'default' : 'override'} update requested for ${args.provider}. It takes effect on the next message.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'set_reasoning_effort',
+  `Change reasoning/thinking effort for this chat or, from the main chat only, the global default for a provider. Claude options: low, medium, high, max. Codex options: minimal, low, medium, high, xhigh. Use provider "current" unless the user specifically names Claude or Codex. Use effort "auto" to clear the override/default and return to the next fallback.`,
+  {
+    scope: z
+      .enum(['chat', 'default'])
+      .describe(
+        'Whether to change this chat override or a global provider default',
+      ),
+    provider: z
+      .enum(['current', 'claude', 'codex'])
+      .describe('Provider to change; use current unless user names a provider'),
+    effort: z.string().describe('Reasoning effort value, or "auto" to clear'),
+  },
+  async (args) => {
+    const effort = args.effort.trim().toLowerCase();
+
+    if (args.scope === 'default' && !isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main chat can change global reasoning defaults.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const provider = resolvedProvider(args.provider);
+    if (!provider) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Current provider is not available yet. Use provider "claude" or "codex", or try again on the next message.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (effort !== 'auto' && !validReasoningEffort(provider, effort)) {
+      const options =
+        provider === 'claude'
+          ? CLAUDE_REASONING_EFFORTS
+          : CODEX_REASONING_EFFORTS;
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Invalid ${provider} effort. Use one of: ${options.join(', ')}, or auto.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'set_reasoning_effort',
+      chatJid,
+      provider: args.provider,
+      scope: args.scope,
+      effort,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Reasoning effort ${args.scope === 'default' ? 'default' : 'override'} update requested for ${args.provider}. It takes effect on the next message.`,
         },
       ],
     };

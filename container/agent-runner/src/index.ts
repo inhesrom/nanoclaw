@@ -38,6 +38,12 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  agentSettings?: RuntimeAgentSettings;
+}
+
+interface RuntimeAgentSettings {
+  model?: string;
+  reasoningEffort?: string;
 }
 
 interface ContainerOutput {
@@ -68,6 +74,8 @@ interface SDKUserMessage {
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
+const CLAUDE_REASONING_EFFORTS = ['low', 'medium', 'high', 'max'] as const;
+type ClaudeReasoningEffort = (typeof CLAUDE_REASONING_EFFORTS)[number];
 
 /**
  * Push-based async iterable for streaming user messages to the SDK.
@@ -370,6 +378,12 @@ function waitForIpcMessage(): Promise<string | null> {
   });
 }
 
+function isClaudeReasoningEffort(
+  effort: string | undefined,
+): effort is ClaudeReasoningEffort {
+  return CLAUDE_REASONING_EFFORTS.includes(effort as ClaudeReasoningEffort);
+}
+
 /**
  * Run a single query and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
@@ -440,9 +454,23 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  const claudeSettings: {
+    model?: string;
+    effort?: ClaudeReasoningEffort;
+    thinking?: { type: 'adaptive' };
+  } = {};
+  if (containerInput.agentSettings?.model) {
+    claudeSettings.model = containerInput.agentSettings.model;
+  }
+  if (isClaudeReasoningEffort(containerInput.agentSettings?.reasoningEffort)) {
+    claudeSettings.effort = containerInput.agentSettings.reasoningEffort;
+    claudeSettings.thinking = { type: 'adaptive' };
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
+      ...claudeSettings,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,

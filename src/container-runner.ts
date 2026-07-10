@@ -28,7 +28,12 @@ import {
 } from './container-runtime.js';
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
-import { AgentRuntime, RegisteredGroup } from './types.js';
+import {
+  AgentRuntime,
+  AgentSettingsSnapshot,
+  RegisteredGroup,
+  RuntimeAgentSettings,
+} from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -45,6 +50,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  agentSettings?: RuntimeAgentSettings;
 }
 
 export interface ContainerOutput {
@@ -870,6 +876,17 @@ export function writeTasksSnapshot(
 
   const tasksFile = path.join(groupIpcDir, 'current_tasks.json');
   fs.writeFileSync(tasksFile, JSON.stringify(filteredTasks, null, 2));
+}
+
+export function writeAgentSettingsSnapshot(
+  groupFolder: string,
+  snapshot: AgentSettingsSnapshot,
+): void {
+  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  const settingsFile = path.join(groupIpcDir, 'agent_settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify(snapshot, null, 2));
 }
 
 export interface AvailableGroup {
