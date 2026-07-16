@@ -24,6 +24,7 @@ groups/global/*
 
 # Temp files
 .tmp-*
+.scratch/
 
 # OS
 .DS_Store
