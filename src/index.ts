@@ -12,6 +12,7 @@ import {
   EVENHUB_MAX_AUDIO_BYTES,
   EVENHUB_PAIRING_TTL_MS,
   EVENHUB_PORT,
+  EVENHUB_WHISPER_URL,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -79,6 +80,8 @@ import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 import { EvenHubServer } from './evenhub/server.js';
+import { WhisperClient } from './evenhub/whisper-client.js';
+import { EvenHubSttWorker } from './evenhub/whisper-worker.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -92,6 +95,7 @@ let messageLoopRunning = false;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 let evenHubServer: EvenHubServer | undefined;
+let evenHubSttWorker: EvenHubSttWorker | undefined;
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -627,12 +631,18 @@ async function main(): Promise<void> {
   loadState();
 
   if (EVENHUB_ENABLED) {
+    evenHubSttWorker = new EvenHubSttWorker(
+      new WhisperClient(EVENHUB_WHISPER_URL),
+      { maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES },
+    );
+    evenHubSttWorker.start();
     evenHubServer = new EvenHubServer({
       host: EVENHUB_HOST,
       port: EVENHUB_PORT,
       audioDir: path.join(STORE_DIR, 'evenhub', 'audio'),
       maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
       pairingTtlMs: EVENHUB_PAIRING_TTL_MS,
+      processor: evenHubSttWorker,
     });
     await evenHubServer.start();
     logger.info(
@@ -652,9 +662,10 @@ async function main(): Promise<void> {
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    await evenHubServer?.stop();
+    await evenHubSttWorker?.stop();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
-    await evenHubServer?.stop();
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));

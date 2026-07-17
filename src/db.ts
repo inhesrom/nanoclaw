@@ -115,7 +115,7 @@ function createSchema(database: Database.Database): void {
       name TEXT NOT NULL,
       token_sha256 TEXT NOT NULL UNIQUE,
       created_at TEXT NOT NULL,
-      last_seen_at TEXT,
+      last_used_at TEXT NOT NULL,
       revoked_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_even_devices_active
@@ -124,14 +124,16 @@ function createSchema(database: Database.Database): void {
       id TEXT PRIMARY KEY,
       device_id TEXT NOT NULL,
       idempotency_key TEXT NOT NULL,
-      audio_sha256 TEXT NOT NULL,
+      request_sha256 TEXT NOT NULL,
       audio_path TEXT NOT NULL UNIQUE,
-      duration_ms INTEGER NOT NULL,
+      audio_duration_ms INTEGER NOT NULL,
       state TEXT NOT NULL,
       transcript TEXT,
+      whatsapp_message_id TEXT UNIQUE,
       answer TEXT,
       error_code TEXT,
       error_message TEXT,
+      stt_attempts INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       completed_at TEXT,
@@ -232,6 +234,45 @@ function createSchema(database: Database.Database): void {
     database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
   } catch {
     /* columns already exist */
+  }
+
+  // Align early EvenHub development databases with the durable protocol names.
+  try {
+    database.exec(
+      `ALTER TABLE even_devices RENAME COLUMN last_seen_at TO last_used_at`,
+    );
+  } catch {
+    /* already current or EvenHub table was just created */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE even_turns RENAME COLUMN audio_sha256 TO request_sha256`,
+    );
+  } catch {
+    /* already current or EvenHub table was just created */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE even_turns RENAME COLUMN duration_ms TO audio_duration_ms`,
+    );
+  } catch {
+    /* already current or EvenHub table was just created */
+  }
+  try {
+    database.exec(`ALTER TABLE even_turns ADD COLUMN whatsapp_message_id TEXT`);
+  } catch {
+    /* column already exists */
+  }
+  database.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_even_turns_whatsapp_message
+     ON even_turns(whatsapp_message_id)`,
+  );
+  try {
+    database.exec(
+      `ALTER TABLE even_turns ADD COLUMN stt_attempts INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* column already exists */
   }
 }
 
@@ -898,14 +939,14 @@ export function activateEvenDeviceFromPairingCode(
     ).run(now);
     db.prepare(
       `INSERT INTO even_devices
-         (id, name, token_sha256, created_at, last_seen_at, revoked_at)
+         (id, name, token_sha256, created_at, last_used_at, revoked_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(
       device.id,
       device.name,
       device.token_sha256,
       device.created_at,
-      device.last_seen_at,
+      device.last_used_at,
       device.revoked_at,
     );
     return true;
@@ -922,7 +963,7 @@ export function getActiveEvenDevices(): EvenDevice[] {
 
 export function touchEvenDevice(id: string, now: string): void {
   db.prepare(
-    'UPDATE even_devices SET last_seen_at = ? WHERE id = ? AND revoked_at IS NULL',
+    'UPDATE even_devices SET last_used_at = ? WHERE id = ? AND revoked_at IS NULL',
   ).run(now, id);
 }
 
@@ -937,9 +978,9 @@ export type NewEvenTurn = Pick<
   | 'id'
   | 'device_id'
   | 'idempotency_key'
-  | 'audio_sha256'
+  | 'request_sha256'
   | 'audio_path'
-  | 'duration_ms'
+  | 'audio_duration_ms'
   | 'state'
   | 'created_at'
   | 'updated_at'
@@ -948,16 +989,16 @@ export type NewEvenTurn = Pick<
 export function insertEvenTurn(turn: NewEvenTurn): void {
   db.prepare(
     `INSERT INTO even_turns
-       (id, device_id, idempotency_key, audio_sha256, audio_path,
-        duration_ms, state, created_at, updated_at)
+       (id, device_id, idempotency_key, request_sha256, audio_path,
+        audio_duration_ms, state, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     turn.id,
     turn.device_id,
     turn.idempotency_key,
-    turn.audio_sha256,
+    turn.request_sha256,
     turn.audio_path,
-    turn.duration_ms,
+    turn.audio_duration_ms,
     turn.state,
     turn.created_at,
     turn.updated_at,
@@ -991,11 +1032,13 @@ export function getEvenTurnByIdempotencyKey(
     .get(deviceId, idempotencyKey) as EvenTurn | undefined;
 }
 
-export function updateEvenTurnState(
+export function transitionEvenTurnState(
   id: string,
+  expectedState: EvenTurnState | readonly EvenTurnState[],
   state: EvenTurnState,
   fields: {
     transcript?: string;
+    whatsappMessageId?: string;
     answer?: string;
     errorCode?: string;
     errorMessage?: string;
@@ -1003,30 +1046,86 @@ export function updateEvenTurnState(
   } = {},
 ): boolean {
   const now = new Date().toISOString();
+  const expectedStates = Array.isArray(expectedState)
+    ? expectedState
+    : [expectedState];
+  if (expectedStates.length === 0) return false;
+  const placeholders = expectedStates.map(() => '?').join(', ');
   return (
     db
       .prepare(
         `UPDATE even_turns SET
            state = ?,
            transcript = COALESCE(?, transcript),
+           whatsapp_message_id = COALESCE(?, whatsapp_message_id),
            answer = COALESCE(?, answer),
            error_code = COALESCE(?, error_code),
            error_message = COALESCE(?, error_message),
            completed_at = COALESCE(?, completed_at),
            updated_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND state IN (${placeholders})`,
       )
       .run(
         state,
         fields.transcript ?? null,
+        fields.whatsappMessageId ?? null,
         fields.answer ?? null,
         fields.errorCode ?? null,
         fields.errorMessage ?? null,
         fields.completedAt ?? null,
         now,
         id,
+        ...expectedStates,
       ).changes === 1
   );
+}
+
+export function reconcileEvenSttTurns(): number {
+  const now = new Date().toISOString();
+  return db
+    .prepare(
+      `UPDATE even_turns
+       SET state = 'accepted', updated_at = ?
+       WHERE state = 'transcribing'`,
+    )
+    .run(now).changes;
+}
+
+export function claimNextAcceptedEvenTurn(): EvenTurn | undefined {
+  return db.transaction(() => {
+    const candidate = db
+      .prepare(
+        `SELECT id FROM even_turns
+         WHERE state = 'accepted'
+         ORDER BY created_at ASC, id ASC
+         LIMIT 1`,
+      )
+      .get() as { id: string } | undefined;
+    if (!candidate) return undefined;
+
+    const now = new Date().toISOString();
+    const claimed = db
+      .prepare(
+        `UPDATE even_turns SET state = 'transcribing', updated_at = ?
+         WHERE id = ? AND state = 'accepted'`,
+      )
+      .run(now, candidate.id);
+    if (claimed.changes !== 1) return undefined;
+    return getEvenTurnById(candidate.id);
+  })();
+}
+
+export function incrementEvenTurnSttAttempts(id: string): number {
+  const now = new Date().toISOString();
+  const updated = db
+    .prepare(
+      `UPDATE even_turns
+       SET stt_attempts = stt_attempts + 1, updated_at = ?
+       WHERE id = ? AND state = 'transcribing'
+       RETURNING stt_attempts`,
+    )
+    .get(now, id) as { stt_attempts: number } | undefined;
+  return updated?.stt_attempts ?? 0;
 }
 
 // --- JSON migration ---

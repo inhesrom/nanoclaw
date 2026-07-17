@@ -17,6 +17,7 @@
     "auth": "tsx src/whatsapp-auth.ts",
     "evenhub:pair": "tsx src/evenhub/cli.ts pair",
     "evenhub:revoke": "tsx src/evenhub/cli.ts revoke",
+    "evenhub:whisper:verify": "tsx src/evenhub/whisper-verify.ts",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest run",

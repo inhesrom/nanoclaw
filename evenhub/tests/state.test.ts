@@ -25,11 +25,12 @@ describe('EvenHub app reducer', () => {
       type: 'TURN_UPDATED',
       turn: active,
       result: {
-        id: 'turn-1',
+        turnId: 'turn-1',
         state: 'running',
         transcript: 'hello',
         createdAt: 'now',
         updatedAt: 'now',
+        pollAfterMs: 500,
       },
     });
     const answer = reduceAppState(thinking, {

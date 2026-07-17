@@ -14,6 +14,7 @@ glasses.
 4. In this directory, run `npm install`, `npm run dev`, then
    `npm run simulate`.
 
-The production host has no fixture or canned-answer processor. The paired
-durability slice uses an injected processor only in integration tests; local
-Whisper and NanoClaw dispatch are added by the following implementation slices.
+The production host sends accepted recordings to a single FIFO local Whisper
+worker. See [the host setup](../docs/evenhub-local-whisper.md) for the pinned
+runtime, checksum verification, and loopback command. WhatsApp/NanoClaw
+dispatch is added by the following implementation slice.

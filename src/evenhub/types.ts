@@ -15,7 +15,7 @@ export interface EvenDevice {
   name: string;
   token_sha256: string;
   created_at: string;
-  last_seen_at: string | null;
+  last_used_at: string;
   revoked_at: string | null;
 }
 
@@ -37,41 +37,57 @@ export interface EvenTurn {
   id: string;
   device_id: string;
   idempotency_key: string;
-  audio_sha256: string;
+  request_sha256: string;
   audio_path: string;
-  duration_ms: number;
+  audio_duration_ms: number;
   state: EvenTurnState;
   transcript: string | null;
+  whatsapp_message_id: string | null;
   answer: string | null;
   error_code: string | null;
   error_message: string | null;
+  stt_attempts: number;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
 }
 
 export interface PublicEvenTurn {
-  id: string;
+  turnId: string;
   state: EvenTurnState;
   transcript?: string;
   answer?: string;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; retryable: boolean };
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  pollAfterMs: number;
 }
+
+const RETRYABLE_EVEN_TURN_ERRORS = new Set([
+  'stt_unavailable',
+  'whatsapp_unavailable',
+  'agent_failed',
+]);
 
 export function toPublicEvenTurn(turn: EvenTurn): PublicEvenTurn {
   return {
-    id: turn.id,
+    turnId: turn.id,
     state: turn.state,
     ...(turn.transcript ? { transcript: turn.transcript } : {}),
     ...(turn.answer ? { answer: turn.answer } : {}),
     ...(turn.error_code && turn.error_message
-      ? { error: { code: turn.error_code, message: turn.error_message } }
+      ? {
+          error: {
+            code: turn.error_code,
+            message: turn.error_message,
+            retryable: RETRYABLE_EVEN_TURN_ERRORS.has(turn.error_code),
+          },
+        }
       : {}),
     createdAt: turn.created_at,
     updatedAt: turn.updated_at,
     ...(turn.completed_at ? { completedAt: turn.completed_at } : {}),
+    pollAfterMs: 500,
   };
 }

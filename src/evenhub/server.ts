@@ -15,7 +15,7 @@ import {
   insertEvenTurn,
   recordEvenPairingFailure,
   touchEvenDevice,
-  updateEvenTurnState,
+  transitionEvenTurnState,
 } from '../db.js';
 import { logger } from '../logger.js';
 import type { EvenDevice, EvenTurn } from './types.js';
@@ -60,6 +60,7 @@ class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly retryable = false,
   ) {
     super(message);
   }
@@ -98,7 +99,11 @@ function sendJson(
 
 function sendError(response: ServerResponse, error: ApiError): void {
   sendJson(response, error.status, {
-    error: { code: error.code, message: error.message },
+    error: {
+      code: error.code,
+      message: error.message,
+      retryable: error.retryable,
+    },
   });
 }
 
@@ -459,7 +464,7 @@ export class EvenHubServer {
         name: deviceName.trim(),
         token_sha256: sha256(token),
         created_at: timestamp,
-        last_seen_at: timestamp,
+        last_used_at: timestamp,
         revoked_at: null,
       },
       timestamp,
@@ -495,6 +500,14 @@ export class EvenHubServer {
       this.options.audioDir,
       this.maxAudioBytes,
     );
+    if (written.size % 2 !== 0) {
+      fs.rmSync(written.tempPath, { force: true });
+      throw new ApiError(
+        422,
+        'invalid_audio',
+        'PCM audio must contain complete signed 16-bit samples',
+      );
+    }
     const expectedBytes = durationMs * 32;
     if (written.size === 0 || Math.abs(written.size - expectedBytes) > 640) {
       fs.rmSync(written.tempPath, { force: true });
@@ -508,7 +521,7 @@ export class EvenHubServer {
     const existing = getEvenTurnByIdempotencyKey(device.id, idempotencyKey);
     if (existing) {
       fs.rmSync(written.tempPath, { force: true });
-      if (existing.audio_sha256 !== written.sha256) {
+      if (existing.request_sha256 !== written.sha256) {
         throw new ApiError(
           409,
           'idempotency_payload_mismatch',
@@ -529,14 +542,16 @@ export class EvenHubServer {
       id,
       device_id: device.id,
       idempotency_key: idempotencyKey,
-      audio_sha256: written.sha256,
+      request_sha256: written.sha256,
       audio_path: finalPath,
-      duration_ms: durationMs,
+      audio_duration_ms: durationMs,
       state: 'accepted',
       transcript: null,
+      whatsapp_message_id: null,
       answer: null,
       error_code: null,
       error_message: null,
+      stt_attempts: 0,
       created_at: timestamp,
       updated_at: timestamp,
       completed_at: null,
@@ -547,7 +562,7 @@ export class EvenHubServer {
       fs.rmSync(finalPath, { force: true });
       const raced = getEvenTurnByIdempotencyKey(device.id, idempotencyKey);
       if (!raced) throw error;
-      if (raced.audio_sha256 !== written.sha256) {
+      if (raced.request_sha256 !== written.sha256) {
         throw new ApiError(
           409,
           'idempotency_payload_mismatch',
@@ -561,6 +576,15 @@ export class EvenHubServer {
     }
 
     sendJson(response, 202, toPublicEvenTurn(turn));
+    logger.info(
+      {
+        turn_id: id,
+        state: 'accepted',
+        audio_duration_ms: durationMs,
+        audio_bytes: written.size,
+      },
+      'even.turn.accepted',
+    );
     if (this.options.processor) {
       setImmediate(() => {
         void this.options.processor!.process(turn).catch((error) => {
@@ -569,7 +593,7 @@ export class EvenHubServer {
             'EvenHub turn processor failed',
           );
           const failedAt = new Date().toISOString();
-          updateEvenTurnState(id, 'failed', {
+          transitionEvenTurnState(id, 'accepted', 'failed', {
             errorCode: 'processor_failed',
             errorMessage: 'Turn processing failed',
             completedAt: failedAt,

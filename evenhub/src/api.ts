@@ -5,6 +5,7 @@ export class EvenHubApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly retryable = false,
   ) {
     super(message);
   }
@@ -27,7 +28,7 @@ export interface EvenHubApiPort {
 }
 
 interface ErrorEnvelope {
-  error?: { code?: string; message?: string };
+  error?: { code?: string; message?: string; retryable?: boolean };
 }
 
 export class EvenHubApi implements EvenHubApiPort {
@@ -75,6 +76,7 @@ export class EvenHubApi implements EvenHubApiPort {
         response.status,
         body.error?.code || 'request_failed',
         body.error?.message || `Request failed with status ${response.status}`,
+        body.error?.retryable ?? response.status >= 500,
       );
     }
     return body;

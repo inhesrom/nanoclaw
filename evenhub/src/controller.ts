@@ -107,6 +107,10 @@ export class TurnController {
         activeTurn,
       });
       await this.poll(activeTurn);
+      return;
+    }
+    if (this.stateValue.kind === 'error') {
+      await this.newTurn();
     }
   }
 
@@ -154,10 +158,13 @@ export class TurnController {
           upload.idempotencyKey,
         );
         const activeTurn = {
-          id: result.id,
+          id: result.turnId,
           idempotencyKey: upload.idempotencyKey,
         };
-        await this.options.storage.set(STORAGE_KEYS.activeTurnId, result.id);
+        await this.options.storage.set(
+          STORAGE_KEYS.activeTurnId,
+          result.turnId,
+        );
         this.pendingUpload = undefined;
         this.dispatch({ type: 'TURN_ACCEPTED', turn: activeTurn });
         if (await this.consumeTurn(activeTurn, result)) return;
@@ -181,7 +188,7 @@ export class TurnController {
         const result = await this.options.api.getTurn(token, activeTurn.id);
         failures = 0;
         if (await this.consumeTurn(activeTurn, result)) return;
-        await this.delay(500);
+        await this.delay(result.pollAfterMs);
       } catch (error) {
         if (generation !== this.generation) return;
         if (error instanceof EvenHubApiError) {
@@ -206,12 +213,12 @@ export class TurnController {
       const pages = this.options.paginateAnswer(result.answer || '');
       await this.options.storage.set(
         STORAGE_KEYS.lastCompletedTurnId,
-        result.id,
+        result.turnId,
       );
       await this.clearActiveTurn();
       this.dispatch({
         type: 'TURN_COMPLETED',
-        turnId: result.id,
+        turnId: result.turnId,
         transcript: result.transcript,
         pages,
       });
@@ -223,7 +230,7 @@ export class TurnController {
         type: 'FAILED',
         message:
           result.error?.message || 'NanoClaw could not process this turn.',
-        retryable: false,
+        retryable: result.error?.retryable ?? false,
       });
       return true;
     }

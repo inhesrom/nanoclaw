@@ -9,7 +9,7 @@ import {
   _closeDatabase,
   _initTestDatabase,
   getActiveEvenDevices,
-  updateEvenTurnState,
+  transitionEvenTurnState,
 } from '../db.js';
 import { createEvenPairingCode } from './pairing.js';
 import { EvenHubServer } from './server.js';
@@ -27,7 +27,7 @@ describe('EvenHub LAN API', () => {
       audioDir,
       processor: {
         async process(turn) {
-          updateEvenTurnState(turn.id, 'completed', {
+          transitionEvenTurnState(turn.id, 'accepted', 'completed', {
             transcript: 'fixture audio',
             answer: 'Fixture answer from the injected processor.',
             completedAt: new Date().toISOString(),
@@ -77,19 +77,19 @@ describe('EvenHub LAN API', () => {
     });
     expect(accepted.status).toBe(202);
     const acceptedTurn = accepted.body as {
-      id: string;
+      turnId: string;
       state: string;
     };
     expect(acceptedTurn.state).toBe('accepted');
-    expect(fs.existsSync(path.join(audioDir, `${acceptedTurn.id}.pcm`))).toBe(
-      true,
-    );
+    expect(
+      fs.existsSync(path.join(audioDir, `${acceptedTurn.turnId}.pcm`)),
+    ).toBe(true);
 
     let completed: { state: string; answer?: string } | undefined;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const result = await server.inject({
         method: 'GET',
-        pathname: `/api/even/v1/turns/${acceptedTurn.id}`,
+        pathname: `/api/even/v1/turns/${acceptedTurn.turnId}`,
         headers: { Authorization: `Bearer ${token}` },
       });
       completed = result.body as typeof completed;
@@ -110,7 +110,7 @@ describe('EvenHub LAN API', () => {
     expect(replay.status).toBe(200);
     expect(replay.headers['Idempotency-Replayed']).toBe('true');
     expect(replay.body as object).toMatchObject({
-      id: acceptedTurn.id,
+      turnId: acceptedTurn.turnId,
       state: 'completed',
     });
 
@@ -162,6 +162,26 @@ describe('EvenHub LAN API', () => {
       body: new Uint8Array(8_000),
     });
     expect(response.status).toBe(415);
+    expect(fs.readdirSync(audioDir)).toHaveLength(0);
+  });
+
+  it('rejects incomplete signed 16-bit samples', async () => {
+    const token = await pair();
+    const response = await server.inject({
+      method: 'POST',
+      pathname: '/api/even/v1/turns',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'audio/L16;rate=16000;channels=1',
+        'Idempotency-Key': randomUUID(),
+        'X-Audio-Duration-Ms': '250',
+      },
+      body: new Uint8Array(8_001),
+    });
+    expect(response.status).toBe(422);
+    expect(response.body as object).toMatchObject({
+      error: { code: 'invalid_audio', retryable: false },
+    });
     expect(fs.readdirSync(audioDir)).toHaveLength(0);
   });
 });

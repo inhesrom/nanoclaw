@@ -8,14 +8,15 @@ export type ServerTurnState =
   | 'failed';
 
 export interface ServerTurn {
-  id: string;
+  turnId: string;
   state: ServerTurnState;
   transcript?: string;
   answer?: string;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; retryable: boolean };
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  pollAfterMs: number;
 }
 
 export interface ActiveTurn {

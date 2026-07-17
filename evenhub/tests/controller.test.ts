@@ -18,13 +18,14 @@ class MemoryStorage implements StoragePort {
 }
 
 const completedTurn: ServerTurn = {
-  id: 'turn-1',
+  turnId: 'turn-1',
   state: 'completed',
   transcript: 'fixture audio',
   answer: 'first page / second page',
   createdAt: '2026-07-16T00:00:00.000Z',
   updatedAt: '2026-07-16T00:00:01.000Z',
   completedAt: '2026-07-16T00:00:01.000Z',
+  pollAfterMs: 500,
 };
 
 function api(overrides: Partial<EvenHubApiPort> = {}): EvenHubApiPort {
@@ -100,5 +101,49 @@ describe('TurnController', () => {
 
     expect(keys).toEqual(['fixed-key', 'fixed-key']);
     expect(controller.state.kind).toBe('answer');
+  });
+
+  it('returns to ready after a retryable terminal STT failure', async () => {
+    const storage = new MemoryStorage(
+      new Map([
+        [STORAGE_KEYS.token, 'token'],
+        [STORAGE_KEYS.activeTurnId, 'turn-1'],
+        [STORAGE_KEYS.activeIdempotencyKey, 'key-1'],
+      ]),
+    );
+    const controller = new TurnController({
+      api: api({
+        async getTurn(): Promise<ServerTurn> {
+          return {
+            ...completedTurn,
+            state: 'failed',
+            answer: undefined,
+            error: {
+              code: 'stt_unavailable',
+              message: 'Local speech recognition is unavailable.',
+              retryable: true,
+            },
+          };
+        },
+      }),
+      storage,
+      paginateAnswer: () => [],
+      onState: () => undefined,
+      delay: async () => undefined,
+    });
+
+    await controller.boot();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (controller.state.kind === 'error') break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(controller.state).toMatchObject({
+      kind: 'error',
+      retryable: true,
+    });
+
+    await controller.retry();
+
+    expect(controller.state).toEqual({ kind: 'ready' });
   });
 });
