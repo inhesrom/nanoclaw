@@ -95,6 +95,7 @@ import {
 import { deliverEvenHubReply } from './evenhub/reply-delivery.js';
 import { startEvenHubCleanup } from './evenhub/cleanup.js';
 import { EvenHubReadiness } from './evenhub/readiness.js';
+import { EvenHubBenchmarkCapture } from './evenhub/benchmark-capture.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -762,6 +763,7 @@ async function main(): Promise<void> {
       whatsapp: isEvenHubWhatsAppReady,
     });
     evenHubSttWorker = new EvenHubSttWorker(whisper, {
+      capture: new EvenHubBenchmarkCapture(STORE_DIR, process.cwd(), logger),
       maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
       onDispatchReady: () => evenHubWhatsAppBridge?.requestDispatch(),
     });

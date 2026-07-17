@@ -34,8 +34,11 @@ whisper-server \
   --model /var/lib/nanoclaw/whisper/ggml-base.en.bin \
   --host 127.0.0.1 --port 8178 \
   --threads 4 --processors 1 \
-  --language en --no-timestamps --no-context
+  --language en --no-timestamps
 ```
+
+The v1.9.1 server sets `no_context=true` internally. It does not expose a
+`--no-context` command-line option; passing that flag makes the process exit.
 
 NanoClaw defaults `EVENHUB_WHISPER_URL` to
 `http://127.0.0.1:8178/inference`. Each request is a canonical 16-bit,
@@ -60,3 +63,5 @@ npx vitest run src/evenhub/wav.test.ts \
 
 Tests use synthetic PCM and a fake loopback response. The physical G2 corpus,
 Pi latency/accuracy gate, and throttling check remain hardware rollout work.
+Use [the physical benchmark runbook](evenhub-whisper-benchmark.md) for capture,
+the five randomized runs, manual intent review, and model selection.

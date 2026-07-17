@@ -7,7 +7,7 @@ After=network-online.target
 Type=simple
 User=nanoclaw-whisper
 Group=nanoclaw-whisper
-ExecStart=/usr/local/bin/whisper-server --model /var/lib/nanoclaw/whisper/ggml-base.en.bin --host 127.0.0.1 --port 8178 --threads 4 --processors 1 --language en --no-timestamps --no-context
+ExecStart=/usr/local/bin/whisper-server --model /var/lib/nanoclaw/whisper/ggml-base.en.bin --host 127.0.0.1 --port 8178 --threads 4 --processors 1 --language en --no-timestamps
 Restart=on-failure
 RestartSec=2
 UMask=0077
@@ -24,7 +24,7 @@ RestrictSUIDSGID=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 IPAddressDeny=any
 IPAddressAllow=localhost
-ReadOnlyPaths=/var/lib/nanoclaw/whisper
+ReadOnlyPaths=/var/lib/nanoclaw/whisper /opt/nanoclaw/whisper-v1.9.1
 # Initial ceiling for base.en; ticket 05 replaces it with measured peak RSS + 25%.
 MemoryMax=1G
 

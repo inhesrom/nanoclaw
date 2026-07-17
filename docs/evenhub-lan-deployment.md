@@ -16,6 +16,10 @@ G2 companion → https://nanoclaw.local:443 → Caddy
 There is no HTTP, IP-address, WAN, cellular, Tailscale, or cloud transcription
 fallback.
 
+Caddy explicitly disables automatic HTTP redirects and HTTP/3, leaving only
+HTTP/1.1 and HTTP/2 on TCP 443. Port 80 must refuse the connection; an HTTP
+redirect or UDP 443 listener is a failed boundary check.
+
 ## Before installation
 
 Use a 64-bit Raspberry Pi OS, active cooling, no overclock, and a fixed private
@@ -58,7 +62,15 @@ npm run evenhub:whisper:verify -- \
   /path/to/ggml-base.en.bin
 sudo useradd --system --home /var/lib/nanoclaw/whisper \
   --shell /usr/sbin/nologin nanoclaw-whisper
-sudo install -o root -g root -m 0755 /path/to/whisper-server \
+sudo install -d -o root -g root -m 0755 \
+  /opt/nanoclaw/whisper-v1.9.1
+sudo cp -a /path/to/extracted/whisper-bin-ubuntu-arm64/. \
+  /opt/nanoclaw/whisper-v1.9.1/
+sudo chown -R root:root /opt/nanoclaw/whisper-v1.9.1
+sudo find /opt/nanoclaw/whisper-v1.9.1 -type d -exec chmod 0755 {} +
+sudo find /opt/nanoclaw/whisper-v1.9.1 -type f -exec chmod 0644 {} +
+sudo chmod 0755 /opt/nanoclaw/whisper-v1.9.1/whisper-server
+sudo ln -s /opt/nanoclaw/whisper-v1.9.1/whisper-server \
   /usr/local/bin/whisper-server
 sudo install -d -o root -g nanoclaw-whisper -m 0750 \
   /var/lib/nanoclaw/whisper
@@ -66,6 +78,11 @@ sudo install -o root -g nanoclaw-whisper -m 0440 \
   /path/to/ggml-base.en.bin \
   /var/lib/nanoclaw/whisper/ggml-base.en.bin
 ```
+
+The official ARM64 archive is dynamically linked and uses an `$ORIGIN`
+runpath. Keep its `libwhisper` and `libggml` files beside the executable in the
+versioned `/opt` tree; copying only `whisper-server` makes the service fail at
+load time. The `/usr/local/bin` entrypoint is a symlink to that verified tree.
 
 Never start the service after a checksum mismatch. The initial `MemoryMax=1G`
 ceiling is intentionally conservative; the hardware gate must replace it with
@@ -142,7 +159,7 @@ Confirm the public boundary and loopback-only listeners:
 ```bash
 curl --fail https://nanoclaw.local/api/even/v1/healthz
 curl --fail https://nanoclaw.local/api/even/v1/readyz
-sudo ss -ltnp | grep -E '(:443|127.0.0.1:18791|127.0.0.1:8178)'
+sudo ss -lntup | grep -E '(:443|127.0.0.1:18791|127.0.0.1:8178)'
 sudo nft list table inet nanoclaw_evenhub
 ```
 
@@ -151,6 +168,10 @@ HTTP 200 only when the API, SQLite, Whisper, and the configured WhatsApp main
 self-chat are ready; audio uploads receive retryable HTTP 503 while degraded.
 Pair with `npm run evenhub:pair`, enter the one-time code in the companion view,
 then revoke and re-pair once as the installation smoke test.
+
+After the physical pairing and recording smoke test passes, continue with the
+[G2 corpus and Pi Whisper benchmark](evenhub-whisper-benchmark.md). Do not arm
+capture during installation or smoke testing.
 
 ## Restart and troubleshooting
 

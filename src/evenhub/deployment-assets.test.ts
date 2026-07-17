@@ -31,6 +31,8 @@ describe('EvenHub deployment assets', () => {
   it('terminates only the fixed HTTPS origin and proxies only the API prefix', () => {
     const caddy = read('Caddyfile');
     expect(caddy).toContain('nanoclaw.local {');
+    expect(caddy).toContain('auto_https disable_redirects');
+    expect(caddy).toMatch(/servers \{\s+protocols h1 h2\s+\}/);
     expect(caddy).toContain('bind {$NANOCLAW_LAN_ADDRESS}');
     expect(caddy).toContain('tls internal');
     expect(caddy).toContain('@evenhub path /api/even/*');
@@ -69,13 +71,16 @@ describe('EvenHub deployment assets', () => {
     expect(unit).toContain('User=nanoclaw-whisper');
     expect(unit).toContain('Group=nanoclaw-whisper');
     expect(unit).toContain(
-      'ExecStart=/usr/local/bin/whisper-server --model /var/lib/nanoclaw/whisper/ggml-base.en.bin --host 127.0.0.1 --port 8178 --threads 4 --processors 1 --language en --no-timestamps --no-context',
+      'ExecStart=/usr/local/bin/whisper-server --model /var/lib/nanoclaw/whisper/ggml-base.en.bin --host 127.0.0.1 --port 8178 --threads 4 --processors 1 --language en --no-timestamps',
     );
+    expect(unit).not.toContain('--no-context');
     expect(unit).toContain('Restart=on-failure');
     expect(unit).toContain('RestartSec=2');
     expect(unit).toContain('NoNewPrivileges=true');
     expect(unit).toContain('PrivateTmp=true');
-    expect(unit).toContain('ReadOnlyPaths=/var/lib/nanoclaw/whisper');
+    expect(unit).toContain(
+      'ReadOnlyPaths=/var/lib/nanoclaw/whisper /opt/nanoclaw/whisper-v1.9.1',
+    );
     expect(unit).toContain('IPAddressDeny=any');
     expect(unit).toContain('IPAddressAllow=localhost');
     expect(unit).toMatch(/MemoryMax=\d+[MG]/);

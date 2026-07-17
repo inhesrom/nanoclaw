@@ -24,6 +24,13 @@ interface WorkerLogger {
 }
 
 export interface EvenHubSttWorkerOptions {
+  capture?: {
+    captureValidatedPcm(
+      source: string,
+      durationMs: number,
+      expectedSha256?: string,
+    ): void;
+  };
   delay?: (milliseconds: number) => Promise<void>;
   logger?: WorkerLogger;
   maxAudioBytes?: number;
@@ -35,6 +42,7 @@ const defaultDelay = (milliseconds: number) =>
 
 export class EvenHubSttWorker implements EvenTurnProcessor {
   private readonly delay: (milliseconds: number) => Promise<void>;
+  private readonly capture?: EvenHubSttWorkerOptions['capture'];
   private readonly logger: WorkerLogger;
   private readonly maxAudioBytes: number;
   private readonly onDispatchReady?: () => void;
@@ -48,6 +56,7 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
     options: EvenHubSttWorkerOptions = {},
   ) {
     this.delay = options.delay ?? defaultDelay;
+    this.capture = options.capture;
     this.logger = options.logger ?? defaultLogger;
     this.maxAudioBytes = options.maxAudioBytes ?? 960_000;
     this.onDispatchReady = options.onDispatchReady;
@@ -119,6 +128,15 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
         startedAt,
       );
       return;
+    }
+    try {
+      this.capture?.captureValidatedPcm(
+        turn.audio_path,
+        turn.audio_duration_ms,
+        turn.request_sha256,
+      );
+    } catch (_error) {
+      this.logger.warn({ turn_id: turn.id }, 'even.capture_hook_failed');
     }
 
     const wav = createCanonicalWav(pcm);

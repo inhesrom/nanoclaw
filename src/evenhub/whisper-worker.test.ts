@@ -246,6 +246,32 @@ describe('EvenHubSttWorker', () => {
     });
     expect(fs.existsSync(audioPath)).toBe(false);
   });
+
+  it('leaves the ordinary turn unaffected when the capture hook fails', async () => {
+    acceptedTurn('turn-capture-failure');
+    const stt = new EvenHubSttWorker(
+      { transcribe: async () => 'ordinary transcript' },
+      {
+        logger: silentLogger,
+        capture: {
+          captureValidatedPcm() {
+            throw new Error('capture disk failure');
+          },
+        },
+      },
+    );
+
+    stt.start();
+    await stt.waitForIdle();
+
+    expect(getEvenTurnById('turn-capture-failure')).toMatchObject({
+      state: 'dispatching',
+      transcript: 'ordinary transcript',
+    });
+    expect(JSON.stringify(silentLogger.warn.mock.calls)).not.toContain(
+      'capture disk failure',
+    );
+  });
 });
 
 function syntheticPcm(durationMs: number): Uint8Array {
