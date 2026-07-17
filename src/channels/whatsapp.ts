@@ -41,6 +41,7 @@ import pino from 'pino';
 const baileysLogger = pino({ level: 'silent' });
 import {
   Channel,
+  DeliveredMessage,
   OnInboundMessage,
   OnChatMetadata,
   RegisteredGroup,
@@ -386,6 +387,24 @@ export class WhatsAppChannel implements Channel {
     }
   }
 
+  async sendSelfMessage(
+    jid: string,
+    text: string,
+    messageId: string,
+  ): Promise<DeliveredMessage> {
+    return this.sendConfirmed(jid, text, messageId);
+  }
+
+  async sendMessageConfirmed(
+    jid: string,
+    text: string,
+  ): Promise<DeliveredMessage> {
+    const prefixed = ASSISTANT_HAS_OWN_NUMBER
+      ? text
+      : `${ASSISTANT_NAME}: ${text}`;
+    return this.sendConfirmed(jid, prefixed);
+  }
+
   isConnected(): boolean {
     return this.connected;
   }
@@ -489,6 +508,33 @@ export class WhatsAppChannel implements Channel {
     this.lidToPhoneMap[lidUser] = phoneJid;
     // Participant IDs in cached group metadata depend on this mapping.
     this.groupMetadataCache.clear();
+  }
+
+  private async sendConfirmed(
+    jid: string,
+    text: string,
+    messageId?: string,
+  ): Promise<DeliveredMessage> {
+    if (!this.connected) throw new Error('WhatsApp is disconnected');
+    const sent = messageId
+      ? await this.sock.sendMessage(jid, { text }, { messageId })
+      : await this.sock.sendMessage(jid, { text });
+    const deliveredId = sent?.key?.id;
+    if (!deliveredId || (messageId && deliveredId !== messageId)) {
+      throw new Error('WhatsApp did not confirm the expected message ID');
+    }
+    if (sent.message) {
+      this.sentMessageCache.set(deliveredId, sent.message);
+      if (this.sentMessageCache.size > 256) {
+        const oldest = this.sentMessageCache.keys().next().value!;
+        this.sentMessageCache.delete(oldest);
+      }
+    }
+    const seconds = Number(sent.messageTimestamp || Date.now() / 1000);
+    return {
+      id: deliveredId,
+      timestamp: new Date(seconds * 1000).toISOString(),
+    };
   }
 
   private async getNormalizedGroupMetadata(

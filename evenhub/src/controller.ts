@@ -16,6 +16,7 @@ export interface TurnControllerOptions {
   onState: (state: AppState) => void;
   delay?: (milliseconds: number) => Promise<void>;
   createIdempotencyKey?: () => string;
+  now?: () => number;
 }
 
 interface PendingUpload {
@@ -148,7 +149,7 @@ export class TurnController {
     );
 
     let lastError: unknown;
-    for (const backoff of [0, 300, 900]) {
+    for (const backoff of [0, 500, 1_000, 2_000]) {
       if (backoff > 0) await this.delay(backoff);
       try {
         const result = await this.options.api.submitTurn(
@@ -172,28 +173,65 @@ export class TurnController {
         return;
       } catch (error) {
         lastError = error;
-        if (error instanceof EvenHubApiError) break;
+        if (error instanceof EvenHubApiError && !error.retryable) break;
       }
     }
-    await this.handleFailure(lastError, undefined, true);
+    await this.handleFailure(
+      lastError,
+      undefined,
+      !(lastError instanceof EvenHubApiError) || lastError.retryable,
+    );
   }
 
   private async poll(activeTurn: ActiveTurn): Promise<void> {
     const token = this.token;
     if (!token) return;
     const generation = ++this.generation;
+    const startedAt = this.now();
+    let polls = 0;
     let failures = 0;
     while (generation === this.generation) {
+      const elapsedMs = this.now() - startedAt;
+      if (elapsedMs >= 5 * 60_000) {
+        await this.handleFailure(
+          new Error('Still working—watch WhatsApp. Reopen to resume.'),
+          activeTurn,
+          true,
+        );
+        return;
+      }
       try {
         const result = await this.options.api.getTurn(token, activeTurn.id);
         failures = 0;
         if (await this.consumeTurn(activeTurn, result)) return;
-        await this.delay(result.pollAfterMs);
+        polls += 1;
+        if (elapsedMs >= 30_000) {
+          this.dispatch({
+            type: 'POLL_NOTICE',
+            message: 'Still working—watch WhatsApp',
+          });
+        }
+        const pollDelay = Math.min(
+          result.pollAfterMs * 2 ** Math.floor((polls - 1) / 10),
+          2_000,
+        );
+        await this.delay(pollDelay);
       } catch (error) {
         if (generation !== this.generation) return;
         if (error instanceof EvenHubApiError) {
-          await this.handleFailure(error, activeTurn, false);
-          return;
+          if (error.status === 404) {
+            await this.clearActiveTurn();
+            this.dispatch({
+              type: 'FAILED',
+              message: 'Turn expired; record a new turn.',
+              retryable: false,
+            });
+            return;
+          }
+          if (!error.retryable) {
+            await this.handleFailure(error, activeTurn, false);
+            return;
+          }
         }
         failures += 1;
         if (failures >= 5) {
@@ -272,6 +310,10 @@ export class TurnController {
 
   private delay(milliseconds: number): Promise<void> {
     return (this.options.delay ?? defaultDelay)(milliseconds);
+  }
+
+  private now(): number {
+    return (this.options.now ?? Date.now)();
   }
 
   private dispatch(action: AppAction): void {

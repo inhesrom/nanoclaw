@@ -17,4 +17,4 @@ glasses.
 The production host sends accepted recordings to a single FIFO local Whisper
 worker. See [the host setup](../docs/evenhub-local-whisper.md) for the pinned
 runtime, checksum verification, and loopback command. WhatsApp/NanoClaw
-dispatch is added by the following implementation slice.
+dispatch uses the [durable turn lifecycle](../docs/evenhub-turn-lifecycle.md).

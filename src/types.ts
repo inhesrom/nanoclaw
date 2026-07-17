@@ -94,6 +94,7 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  even_turn_id?: string;
   thread_id?: string;
   reply_to_message_id?: string;
   reply_to_message_content?: string;
@@ -131,6 +132,12 @@ export interface Channel {
   name: string;
   connect(): Promise<void>;
   sendMessage(jid: string, text: string): Promise<void>;
+  sendSelfMessage?(
+    jid: string,
+    text: string,
+    messageId: string,
+  ): Promise<DeliveredMessage>;
+  sendMessageConfirmed?(jid: string, text: string): Promise<DeliveredMessage>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
@@ -138,6 +145,11 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+}
+
+export interface DeliveredMessage {
+  id: string;
+  timestamp: string;
 }
 
 // Callback type that channels use to deliver inbound messages

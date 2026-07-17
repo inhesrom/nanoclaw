@@ -12,6 +12,7 @@ import {
   EVENHUB_MAX_AUDIO_BYTES,
   EVENHUB_PAIRING_TTL_MS,
   EVENHUB_PORT,
+  EVENHUB_TURN_RETENTION_MS,
   EVENHUB_WHISPER_URL,
   getTriggerPattern,
   GROUPS_DIR,
@@ -45,6 +46,8 @@ import {
   getAgentDefaultSettings,
   deleteSession,
   getAllTasks,
+  getEvenTurnById,
+  getEvenTurnsForChat,
   getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
@@ -55,6 +58,7 @@ import {
   setSession,
   storeChatMetadata,
   storeMessage,
+  transitionEvenTurnState,
 } from './db.js';
 import {
   buildAgentSettingsSnapshot,
@@ -82,6 +86,12 @@ import { logger } from './logger.js';
 import { EvenHubServer } from './evenhub/server.js';
 import { WhisperClient } from './evenhub/whisper-client.js';
 import { EvenHubSttWorker } from './evenhub/whisper-worker.js';
+import {
+  EvenHubWhatsAppBridge,
+  type EvenHubWhatsAppTarget,
+} from './evenhub/whatsapp-bridge.js';
+import { deliverEvenHubReply } from './evenhub/reply-delivery.js';
+import { startEvenHubCleanup } from './evenhub/cleanup.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -96,8 +106,46 @@ const channels: Channel[] = [];
 const queue = new GroupQueue();
 let evenHubServer: EvenHubServer | undefined;
 let evenHubSttWorker: EvenHubSttWorker | undefined;
+let evenHubWhatsAppBridge: EvenHubWhatsAppBridge | undefined;
 
 const onecli = new OneCLI({ url: ONECLI_URL });
+
+function getEvenHubWhatsAppTarget(): EvenHubWhatsAppTarget | undefined {
+  const main = Object.entries(registeredGroups).find(
+    ([jid, group]) => group.isMain === true && jid.endsWith('@s.whatsapp.net'),
+  );
+  if (!main) return undefined;
+  const [jid] = main;
+  const channel = channels.find(
+    (candidate) => candidate.name === 'whatsapp' && candidate.ownsJid(jid),
+  );
+  return channel ? { jid, channel } : undefined;
+}
+
+function markCorrelatedTurnsRunning(messages: NewMessage[]): string[] {
+  const correlatedTurnIds = [
+    ...new Set(
+      messages
+        .map((message) => message.even_turn_id)
+        .filter((turnId): turnId is string => Boolean(turnId)),
+    ),
+  ];
+  const running: string[] = [];
+  for (const turnId of correlatedTurnIds) {
+    const turn = getEvenTurnById(turnId);
+    if (!turn) continue;
+    if (
+      turn.state === 'queued' &&
+      transitionEvenTurnState(turn.id, 'queued', 'running')
+    ) {
+      logger.info({ turn_id: turn.id, state: 'running' }, 'agent.started');
+      running.push(turn.id);
+    } else if (turn.state === 'running') {
+      running.push(turn.id);
+    }
+  }
+  return running;
+}
 
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
   if (group.isMain) return;
@@ -269,14 +317,27 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const isMainGroup = group.isMain === true;
 
-  const missedMessages = getMessagesSince(
+  const allMissedMessages = getMessagesSince(
     chatJid,
     getOrRecoverCursor(chatJid),
     ASSISTANT_NAME,
     MAX_MESSAGES_PER_PROMPT,
   );
 
-  if (missedMessages.length === 0) return true;
+  const missedMessages = allMissedMessages.filter((message) => {
+    if (!message.even_turn_id) return true;
+    const turn = getEvenTurnById(message.even_turn_id);
+    return turn?.state === 'queued' || turn?.state === 'running';
+  });
+
+  if (missedMessages.length === 0) {
+    if (allMissedMessages.length > 0) {
+      lastAgentTimestamp[chatJid] =
+        allMissedMessages[allMissedMessages.length - 1].timestamp;
+      saveState();
+    }
+    return true;
+  }
 
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
@@ -296,8 +357,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // these messages. Save the old cursor so we can roll back on error.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
   lastAgentTimestamp[chatJid] =
-    missedMessages[missedMessages.length - 1].timestamp;
+    allMissedMessages[allMissedMessages.length - 1].timestamp;
   saveState();
+
+  markCorrelatedTurnsRunning(missedMessages);
 
   logger.info(
     { group: group.name, messageCount: missedMessages.length },
@@ -321,6 +384,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
+  let correlatedTerminalFailure = false;
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
@@ -333,8 +397,26 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+        const [runningEvenTurn] = getEvenTurnsForChat(chatJid, ['running']);
+        if (runningEvenTurn) {
+          try {
+            await deliverEvenHubReply(
+              runningEvenTurn.id,
+              chatJid,
+              channel,
+              text,
+            );
+            outputSentToUser = true;
+            evenHubWhatsAppBridge?.requestDispatch();
+          } catch (error) {
+            correlatedTerminalFailure = true;
+            hadError = true;
+            throw error;
+          }
+        } else {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -353,6 +435,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
+    if (correlatedTerminalFailure) return true;
     // If we already sent output to the user, don't roll back the cursor —
     // the user got their response and re-processing would send duplicates.
     if (outputSentToUser) {
@@ -369,6 +452,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       { group: group.name },
       'Agent error, rolled back message cursor for retry',
     );
+    return false;
+  }
+
+  const [unansweredEvenTurn] = getEvenTurnsForChat(chatJid, ['running']);
+  if (unansweredEvenTurn) {
+    logger.warn(
+      { turn_id: unansweredEvenTurn.id, state: 'running' },
+      'Agent completed without a correlated reply',
+    );
+    lastAgentTimestamp[chatJid] = previousCursor;
+    saveState();
     return false;
   }
 
@@ -571,6 +665,7 @@ async function startMessageLoop(): Promise<void> {
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
           if (queue.sendMessage(chatJid, formatted)) {
+            markCorrelatedTurnsRunning(messagesToSend);
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
@@ -631,15 +726,23 @@ async function main(): Promise<void> {
   loadState();
 
   if (EVENHUB_ENABLED) {
+    const evenHubAudioDir = path.join(STORE_DIR, 'evenhub', 'audio');
+    startEvenHubCleanup(evenHubAudioDir, EVENHUB_TURN_RETENTION_MS);
+    evenHubWhatsAppBridge = new EvenHubWhatsAppBridge({
+      getTarget: getEvenHubWhatsAppTarget,
+    });
     evenHubSttWorker = new EvenHubSttWorker(
       new WhisperClient(EVENHUB_WHISPER_URL),
-      { maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES },
+      {
+        maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
+        onDispatchReady: () => evenHubWhatsAppBridge?.requestDispatch(),
+      },
     );
     evenHubSttWorker.start();
     evenHubServer = new EvenHubServer({
       host: EVENHUB_HOST,
       port: EVENHUB_PORT,
-      audioDir: path.join(STORE_DIR, 'evenhub', 'audio'),
+      audioDir: evenHubAudioDir,
       maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
       pairingTtlMs: EVENHUB_PAIRING_TTL_MS,
       processor: evenHubSttWorker,
@@ -664,6 +767,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Shutdown signal received');
     await evenHubServer?.stop();
     await evenHubSttWorker?.stop();
+    await evenHubWhatsAppBridge?.stop();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
@@ -835,6 +939,21 @@ async function main(): Promise<void> {
   });
   startSessionCleanup();
   queue.setProcessMessagesFn(processGroupMessages);
+  queue.setRetriesExhaustedFn((chatJid) => {
+    for (const turn of getEvenTurnsForChat(chatJid, ['running'])) {
+      transitionEvenTurnState(turn.id, 'running', 'failed', {
+        errorCode: 'agent_failed',
+        errorMessage: 'The agent could not complete this turn.',
+        completedAt: new Date().toISOString(),
+      });
+      logger.warn(
+        { turn_id: turn.id, state: 'failed', error_code: 'agent_failed' },
+        'even.turn.failed',
+      );
+    }
+    evenHubWhatsAppBridge?.requestDispatch();
+  });
+  evenHubWhatsAppBridge?.start();
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');

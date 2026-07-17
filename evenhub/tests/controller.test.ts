@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { EvenHubApiPort, PairResult } from '../src/api';
+import {
+  EvenHubApiError,
+  type EvenHubApiPort,
+  type PairResult,
+} from '../src/api';
 import { TurnController } from '../src/controller';
-import type { ServerTurn } from '../src/state';
+import type { AppState, ServerTurn } from '../src/state';
 import { STORAGE_KEYS, type StoragePort } from '../src/storage';
 
 class MemoryStorage implements StoragePort {
@@ -145,5 +149,120 @@ describe('TurnController', () => {
     await controller.retry();
 
     expect(controller.state).toEqual({ kind: 'ready' });
+  });
+
+  it('uses server polling cadence, shows a 30-second notice, and retains a five-minute turn', async () => {
+    const storage = new MemoryStorage(
+      new Map([
+        [STORAGE_KEYS.token, 'token'],
+        [STORAGE_KEYS.activeTurnId, 'turn-1'],
+        [STORAGE_KEYS.activeIdempotencyKey, 'key-1'],
+      ]),
+    );
+    let clock = 0;
+    const delays: number[] = [];
+    const states: AppState[] = [];
+    const controller = new TurnController({
+      api: api({
+        async getTurn(): Promise<ServerTurn> {
+          return { ...completedTurn, state: 'running', answer: undefined };
+        },
+      }),
+      storage,
+      paginateAnswer: () => [],
+      onState: (state) => states.push(state),
+      delay: async (milliseconds) => {
+        delays.push(milliseconds);
+        if (delays.length <= 10) clock += milliseconds;
+        else if (delays.length === 11) clock = 31_000;
+        else clock = 5 * 60_000;
+      },
+      now: () => clock,
+    });
+
+    await controller.boot();
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (controller.state.kind === 'error') break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(delays.slice(0, 10)).toEqual(new Array(10).fill(500));
+    expect(delays[10]).toBe(1_000);
+    expect(states).toContainEqual(
+      expect.objectContaining({
+        kind: 'thinking',
+        notice: 'Still working—watch WhatsApp',
+      }),
+    );
+    expect(controller.state).toMatchObject({
+      kind: 'error',
+      retryable: true,
+      activeTurn: { id: 'turn-1' },
+    });
+    expect(storage.values.get(STORAGE_KEYS.activeTurnId)).toBe('turn-1');
+  });
+
+  it('clears an expired retained turn on 404 without resubmitting', async () => {
+    const storage = new MemoryStorage(
+      new Map([
+        [STORAGE_KEYS.token, 'token'],
+        [STORAGE_KEYS.activeTurnId, 'turn-expired'],
+        [STORAGE_KEYS.activeIdempotencyKey, 'key-expired'],
+      ]),
+    );
+    const submitTurn = vi.fn();
+    const controller = new TurnController({
+      api: api({
+        submitTurn,
+        async getTurn(): Promise<ServerTurn> {
+          throw new EvenHubApiError(404, 'turn_not_found', 'Turn not found');
+        },
+      }),
+      storage,
+      paginateAnswer: () => [],
+      onState: () => undefined,
+      delay: async () => undefined,
+    });
+
+    await controller.boot();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (controller.state.kind === 'error') break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(controller.state).toMatchObject({
+      kind: 'error',
+      message: 'Turn expired; record a new turn.',
+      retryable: false,
+    });
+    expect(storage.values.get(STORAGE_KEYS.activeTurnId)).toBe('');
+    expect(submitTurn).not.toHaveBeenCalled();
+  });
+
+  it('passes the exact API answer string into G2 pagination', async () => {
+    const answer = 'Exact café answer 👓 — unchanged';
+    const storage = new MemoryStorage(new Map([[STORAGE_KEYS.token, 'token']]));
+    const paginateAnswer = vi.fn(() => [answer]);
+    const controller = new TurnController({
+      api: api({
+        async submitTurn(): Promise<ServerTurn> {
+          return { ...completedTurn, answer };
+        },
+      }),
+      storage,
+      paginateAnswer,
+      onState: () => undefined,
+      createIdempotencyKey: () => 'key-1',
+    });
+    await controller.boot();
+    controller.startRecording();
+
+    await controller.submit(new Uint8Array(8_000), 250);
+
+    expect(paginateAnswer).toHaveBeenCalledWith(answer);
+    expect(controller.state).toMatchObject({
+      kind: 'answer',
+      pages: [answer],
+    });
   });
 });

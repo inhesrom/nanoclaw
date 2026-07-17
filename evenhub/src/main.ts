@@ -259,12 +259,12 @@ function glassesView(state: AppState): { body: string; pager: string } {
       return { body: 'Securing audio…', pager: 'Local network' };
     case 'transcribing':
       return {
-        body: state.transcript || 'Transcribing locally…',
+        body: state.notice || state.transcript || 'Transcribing locally…',
         pager: 'Whisper on NanoClaw host',
       };
     case 'thinking':
       return {
-        body: state.transcript || 'NanoClaw is thinking…',
+        body: state.notice || state.transcript || 'NanoClaw is thinking…',
         pager: 'Shared WhatsApp context',
       };
     case 'answer':

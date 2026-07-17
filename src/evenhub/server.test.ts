@@ -27,7 +27,13 @@ describe('EvenHub LAN API', () => {
       audioDir,
       processor: {
         async process(turn) {
-          transitionEvenTurnState(turn.id, 'accepted', 'completed', {
+          transitionEvenTurnState(turn.id, 'accepted', 'transcribing');
+          transitionEvenTurnState(turn.id, 'transcribing', 'dispatching', {
+            transcript: 'fixture audio',
+          });
+          transitionEvenTurnState(turn.id, 'dispatching', 'queued');
+          transitionEvenTurnState(turn.id, 'queued', 'running');
+          transitionEvenTurnState(turn.id, 'running', 'completed', {
             transcript: 'fixture audio',
             answer: 'Fixture answer from the injected processor.',
             completedAt: new Date().toISOString(),
@@ -183,5 +189,36 @@ describe('EvenHub LAN API', () => {
       error: { code: 'invalid_audio', retryable: false },
     });
     expect(fs.readdirSync(audioDir)).toHaveLength(0);
+  });
+
+  it('revokes the previous token and preserves turn ownership on re-pair', async () => {
+    const firstToken = await pair();
+    const accepted = await server.inject({
+      method: 'POST',
+      pathname: '/api/even/v1/turns',
+      headers: {
+        Authorization: `Bearer ${firstToken}`,
+        'Content-Type': 'audio/L16;rate=16000;channels=1',
+        'Idempotency-Key': randomUUID(),
+        'X-Audio-Duration-Ms': '250',
+      },
+      body: new Uint8Array(8_000),
+    });
+    const { turnId } = accepted.body as { turnId: string };
+
+    const replacementToken = await pair();
+    const revoked = await server.inject({
+      method: 'GET',
+      pathname: `/api/even/v1/turns/${turnId}`,
+      headers: { Authorization: `Bearer ${firstToken}` },
+    });
+    expect(revoked.status).toBe(401);
+
+    const notOwned = await server.inject({
+      method: 'GET',
+      pathname: `/api/even/v1/turns/${turnId}`,
+      headers: { Authorization: `Bearer ${replacementToken}` },
+    });
+    expect(notOwned.status).toBe(404);
   });
 });

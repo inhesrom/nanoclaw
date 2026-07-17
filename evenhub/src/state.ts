@@ -30,8 +30,18 @@ export type AppState =
   | { kind: 'ready' }
   | { kind: 'recording'; startedAt: number; bytes: number }
   | { kind: 'uploading'; idempotencyKey: string }
-  | { kind: 'transcribing'; turn: ActiveTurn; transcript?: string }
-  | { kind: 'thinking'; turn: ActiveTurn; transcript?: string }
+  | {
+      kind: 'transcribing';
+      turn: ActiveTurn;
+      transcript?: string;
+      notice?: string;
+    }
+  | {
+      kind: 'thinking';
+      turn: ActiveTurn;
+      transcript?: string;
+      notice?: string;
+    }
   | {
       kind: 'answer';
       turnId: string;
@@ -55,6 +65,7 @@ export type AppAction =
   | { type: 'UPLOAD_STARTED'; idempotencyKey: string }
   | { type: 'TURN_ACCEPTED'; turn: ActiveTurn }
   | { type: 'TURN_UPDATED'; turn: ActiveTurn; result: ServerTurn }
+  | { type: 'POLL_NOTICE'; message: string }
   | {
       type: 'TURN_COMPLETED';
       turnId: string;
@@ -120,6 +131,10 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
           kind: 'transcribing',
           turn: action.turn,
           transcript: action.result.transcript,
+          notice:
+            state.kind === 'transcribing' || state.kind === 'thinking'
+              ? state.notice
+              : undefined,
         };
       }
       if (
@@ -131,9 +146,17 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
           kind: 'thinking',
           turn: action.turn,
           transcript: action.result.transcript,
+          notice:
+            state.kind === 'transcribing' || state.kind === 'thinking'
+              ? state.notice
+              : undefined,
         };
       }
       return state;
+    case 'POLL_NOTICE':
+      return state.kind === 'transcribing' || state.kind === 'thinking'
+        ? { ...state, notice: action.message }
+        : state;
     case 'TURN_COMPLETED':
       return {
         kind: 'answer',

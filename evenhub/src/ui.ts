@@ -191,9 +191,9 @@ function renderState(state: AppState): string {
     case 'uploading':
       return `${heading}<p class="instruction">Securing the recorded audio on your local host.</p>`;
     case 'transcribing':
-      return `${heading}<p class="instruction">Local speech recognition is reading the recording.</p>${state.transcript ? `<p class="transcript">${escapeHtml(state.transcript)}</p>` : ''}`;
+      return `${heading}<p class="instruction">Local speech recognition is reading the recording.</p>${state.transcript ? `<p class="transcript">${escapeHtml(state.transcript)}</p>` : ''}${state.notice ? `<p class="metric">${escapeHtml(state.notice)}</p>` : ''}`;
     case 'thinking':
-      return `${heading}<p class="instruction">The turn is now in the same context path as WhatsApp.</p>${state.transcript ? `<p class="transcript">${escapeHtml(state.transcript)}</p>` : ''}`;
+      return `${heading}<p class="instruction">The turn is now in the same context path as WhatsApp.</p>${state.transcript ? `<p class="transcript">${escapeHtml(state.transcript)}</p>` : ''}${state.notice ? `<p class="metric">${escapeHtml(state.notice)}</p>` : ''}`;
     case 'answer':
       return `${heading}<div class="panel"><div class="metric">Page ${state.page + 1} / ${state.pages.length}</div><p class="answer">${escapeHtml(state.pages[state.page])}</p><button class="secondary" data-action="new">Record another turn</button>${state.transcript ? `<p class="transcript">Heard: ${escapeHtml(state.transcript)}</p>` : ''}</div>`;
     case 'error':

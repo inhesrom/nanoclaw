@@ -46,6 +46,7 @@ function createSchema(database: Database.Database): void {
       timestamp TEXT,
       is_from_me INTEGER,
       is_bot_message INTEGER DEFAULT 0,
+      even_turn_id TEXT,
       PRIMARY KEY (id, chat_jid),
       FOREIGN KEY (chat_jid) REFERENCES chats(jid)
     );
@@ -174,6 +175,20 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+
+  try {
+    database.exec(`ALTER TABLE messages ADD COLUMN even_turn_id TEXT`);
+    database.exec(
+      `CREATE INDEX IF NOT EXISTS idx_messages_even_turn
+       ON messages(even_turn_id)`,
+    );
+  } catch {
+    /* column already exists */
+  }
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_messages_even_turn
+     ON messages(even_turn_id)`,
+  );
 
   // Add is_main column if it doesn't exist (migration for existing DBs)
   try {
@@ -401,8 +416,16 @@ export function setLastGroupSync(): void {
  * Only call this for registered groups where message history is needed.
  */
 export function storeMessage(msg: NewMessage): void {
+  const correlatedTurn = msg.even_turn_id
+    ? { id: msg.even_turn_id }
+    : getEvenTurnByWhatsAppMessageId(msg.id);
+  const evenTurnId = correlatedTurn?.id ?? null;
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, reply_to_message_id, reply_to_message_content, reply_to_sender_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages
+       (id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+        is_bot_message, even_turn_id, reply_to_message_id,
+        reply_to_message_content, reply_to_sender_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -411,7 +434,8 @@ export function storeMessage(msg: NewMessage): void {
     msg.content,
     msg.timestamp,
     msg.is_from_me ? 1 : 0,
-    msg.is_bot_message ? 1 : 0,
+    evenTurnId ? 0 : msg.is_bot_message ? 1 : 0,
+    evenTurnId,
     msg.reply_to_message_id ?? null,
     msg.reply_to_message_content ?? null,
     msg.reply_to_sender_name ?? null,
@@ -430,9 +454,13 @@ export function storeMessageDirect(msg: {
   timestamp: string;
   is_from_me: boolean;
   is_bot_message?: boolean;
+  even_turn_id?: string;
 }): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages
+       (id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+        is_bot_message, even_turn_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -442,6 +470,7 @@ export function storeMessageDirect(msg: {
     msg.timestamp,
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
+    msg.even_turn_id ?? null,
   );
 }
 
@@ -460,6 +489,7 @@ export function getNewMessages(
   const sql = `
     SELECT * FROM (
       SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+             even_turn_id,
              reply_to_message_id, reply_to_message_content, reply_to_sender_name
       FROM messages
       WHERE timestamp > ? AND chat_jid IN (${placeholders})
@@ -494,6 +524,7 @@ export function getMessagesSince(
   const sql = `
     SELECT * FROM (
       SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+             even_turn_id,
              reply_to_message_id, reply_to_message_content, reply_to_sender_name
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
@@ -1046,10 +1077,26 @@ export function transitionEvenTurnState(
   } = {},
 ): boolean {
   const now = new Date().toISOString();
-  const expectedStates = Array.isArray(expectedState)
-    ? expectedState
-    : [expectedState];
+  const expectedStates: readonly EvenTurnState[] =
+    typeof expectedState === 'string' ? [expectedState] : expectedState;
   if (expectedStates.length === 0) return false;
+  const legalTransitions: Record<EvenTurnState, readonly EvenTurnState[]> = {
+    accepted: ['transcribing', 'failed'],
+    transcribing: ['dispatching', 'failed'],
+    dispatching: ['queued', 'failed'],
+    queued: ['running', 'failed'],
+    running: ['completed', 'failed'],
+    completed: [],
+    failed: [],
+  };
+  if (
+    expectedStates.some(
+      (expected) => !legalTransitions[expected].includes(state),
+    ) ||
+    (fields.answer !== undefined && state !== 'completed')
+  ) {
+    return false;
+  }
   const placeholders = expectedStates.map(() => '?').join(', ');
   return (
     db
@@ -1058,7 +1105,10 @@ export function transitionEvenTurnState(
            state = ?,
            transcript = COALESCE(?, transcript),
            whatsapp_message_id = COALESCE(?, whatsapp_message_id),
-           answer = COALESCE(?, answer),
+           answer = CASE
+             WHEN state = 'completed' THEN answer
+             ELSE COALESCE(?, answer)
+           END,
            error_code = COALESCE(?, error_code),
            error_message = COALESCE(?, error_message),
            completed_at = COALESCE(?, completed_at),
@@ -1126,6 +1176,143 @@ export function incrementEvenTurnSttAttempts(id: string): number {
     )
     .get(now, id) as { stt_attempts: number } | undefined;
   return updated?.stt_attempts ?? 0;
+}
+
+export function getEvenTurnByWhatsAppMessageId(
+  messageId: string,
+): EvenTurn | undefined {
+  return db
+    .prepare('SELECT * FROM even_turns WHERE whatsapp_message_id = ?')
+    .get(messageId) as EvenTurn | undefined;
+}
+
+export function getEvenTurnsByStates(
+  states: readonly EvenTurnState[],
+): EvenTurn[] {
+  if (states.length === 0) return [];
+  const placeholders = states.map(() => '?').join(', ');
+  return db
+    .prepare(
+      `SELECT * FROM even_turns
+       WHERE state IN (${placeholders})
+       ORDER BY created_at ASC, id ASC`,
+    )
+    .all(...states) as EvenTurn[];
+}
+
+export function getNextEvenTurnToDispatch(): EvenTurn | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM even_turns
+       WHERE state = 'dispatching'
+         AND whatsapp_message_id IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM even_turns active
+           WHERE active.state IN ('queued', 'running')
+         )
+       ORDER BY created_at ASC, id ASC
+       LIMIT 1`,
+    )
+    .get() as EvenTurn | undefined;
+}
+
+export function reserveEvenTurnWhatsAppMessage(
+  turnId: string,
+  messageId: string,
+): boolean {
+  const now = new Date().toISOString();
+  return (
+    db
+      .prepare(
+        `UPDATE even_turns
+         SET whatsapp_message_id = ?, updated_at = ?
+         WHERE id = ? AND state = 'dispatching'
+           AND whatsapp_message_id IS NULL`,
+      )
+      .run(messageId, now, turnId).changes === 1
+  );
+}
+
+export function hasStoredEvenTurnPrompt(
+  turnId: string,
+  messageId: string,
+): boolean {
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1 FROM messages
+         WHERE id = ? AND even_turn_id = ?
+         LIMIT 1`,
+      )
+      .get(messageId, turnId),
+  );
+}
+
+export function markEvenTurnQueuedAfterPrompt(
+  turnId: string,
+  messageId: string,
+): boolean {
+  return db.transaction(() => {
+    if (!hasStoredEvenTurnPrompt(turnId, messageId)) return false;
+    const now = new Date().toISOString();
+    return (
+      db
+        .prepare(
+          `UPDATE even_turns SET state = 'queued', updated_at = ?
+           WHERE id = ? AND state = 'dispatching'
+             AND whatsapp_message_id = ?`,
+        )
+        .run(now, turnId, messageId).changes === 1
+    );
+  })();
+}
+
+export function getEvenTurnsForChat(
+  chatJid: string,
+  states: readonly EvenTurnState[],
+): EvenTurn[] {
+  if (states.length === 0) return [];
+  const placeholders = states.map(() => '?').join(', ');
+  return db
+    .prepare(
+      `SELECT DISTINCT turn.*
+       FROM even_turns turn
+       JOIN messages message ON message.even_turn_id = turn.id
+       WHERE message.chat_jid = ? AND turn.state IN (${placeholders})
+       ORDER BY turn.created_at ASC, turn.id ASC`,
+    )
+    .all(chatJid, ...states) as EvenTurn[];
+}
+
+export function getExpiredEvenTurns(cutoff: string): EvenTurn[] {
+  return db
+    .prepare(
+      `SELECT * FROM even_turns
+       WHERE state IN ('completed', 'failed')
+         AND COALESCE(completed_at, updated_at) < ?
+       ORDER BY COALESCE(completed_at, updated_at) ASC`,
+    )
+    .all(cutoff) as EvenTurn[];
+}
+
+export function deleteExpiredEvenTurn(id: string, cutoff: string): boolean {
+  return (
+    db
+      .prepare(
+        `DELETE FROM even_turns
+         WHERE id = ? AND state IN ('completed', 'failed')
+           AND COALESCE(completed_at, updated_at) < ?`,
+      )
+      .run(id, cutoff).changes === 1
+  );
+}
+
+export function getReferencedEvenAudioPaths(): string[] {
+  return (
+    db.prepare('SELECT audio_path FROM even_turns').all() as Array<{
+      audio_path: string;
+    }>
+  ).map((row) => row.audio_path);
 }
 
 // --- JSON migration ---

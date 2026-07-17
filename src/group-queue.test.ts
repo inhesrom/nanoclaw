@@ -184,6 +184,7 @@ describe('GroupQueue', () => {
 
   it('stops retrying after MAX_RETRIES and resets', async () => {
     let callCount = 0;
+    const exhausted = vi.fn();
 
     const processMessages = vi.fn(async () => {
       callCount++;
@@ -191,6 +192,7 @@ describe('GroupQueue', () => {
     });
 
     queue.setProcessMessagesFn(processMessages);
+    queue.setRetriesExhaustedFn(exhausted);
     queue.enqueueMessageCheck('group1@g.us');
 
     // Run through all 5 retries (MAX_RETRIES = 5)
@@ -209,6 +211,8 @@ describe('GroupQueue', () => {
     const countAfterMaxRetries = callCount;
     await vi.advanceTimersByTimeAsync(200000); // Wait a long time
     expect(callCount).toBe(countAfterMaxRetries);
+    expect(exhausted).toHaveBeenCalledOnce();
+    expect(exhausted).toHaveBeenCalledWith('group1@g.us');
   });
 
   // --- Waiting groups get drained when slots free up ---

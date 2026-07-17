@@ -14,3 +14,4 @@ The files in this directory are original design documents and developer referenc
 | [docker-sandboxes.md](docker-sandboxes.md) | [Docker Sandboxes](https://docs.nanoclaw.dev/advanced/docker-sandboxes) |
 | [APPLE-CONTAINER-NETWORKING.md](APPLE-CONTAINER-NETWORKING.md) | [Container runtime](https://docs.nanoclaw.dev/advanced/container-runtime) |
 | [evenhub-local-whisper.md](evenhub-local-whisper.md) | Private EvenHub Pi runtime reference |
+| [evenhub-turn-lifecycle.md](evenhub-turn-lifecycle.md) | Private EvenHub WhatsApp correlation reference |

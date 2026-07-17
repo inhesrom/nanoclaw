@@ -27,6 +27,7 @@ export interface EvenHubSttWorkerOptions {
   delay?: (milliseconds: number) => Promise<void>;
   logger?: WorkerLogger;
   maxAudioBytes?: number;
+  onDispatchReady?: () => void;
 }
 
 const defaultDelay = (milliseconds: number) =>
@@ -36,6 +37,7 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
   private readonly delay: (milliseconds: number) => Promise<void>;
   private readonly logger: WorkerLogger;
   private readonly maxAudioBytes: number;
+  private readonly onDispatchReady?: () => void;
   private running = false;
   private workRequested = false;
   private stopping = false;
@@ -48,6 +50,7 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
     this.delay = options.delay ?? defaultDelay;
     this.logger = options.logger ?? defaultLogger;
     this.maxAudioBytes = options.maxAudioBytes ?? 960_000;
+    this.onDispatchReady = options.onDispatchReady;
   }
 
   start(): void {
@@ -167,6 +170,7 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
           },
           'stt.completed',
         );
+        this.onDispatchReady?.();
         return;
       } catch (error) {
         const retryable =
