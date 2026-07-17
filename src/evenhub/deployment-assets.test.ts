@@ -21,7 +21,6 @@ describe('EvenHub deployment assets', () => {
       'EVENHUB_HOST=127.0.0.1',
       'EVENHUB_PORT=18791',
       'EVENHUB_PUBLIC_ORIGIN=https://nanoclaw.local',
-      'EVENHUB_WHISPER_URL=http://127.0.0.1:8178/inference',
       'EVENHUB_MAX_AUDIO_BYTES=960000',
       'EVENHUB_PAIRING_TTL_MS=300000',
       'EVENHUB_TURN_RETENTION_MS=604800000',
@@ -74,35 +73,32 @@ describe('EvenHub deployment assets', () => {
     ).toBeLessThan(firewall.indexOf('iifname $lan_interface drop'));
   });
 
-  it('runs the pinned Whisper command as a hardened loopback service', () => {
-    const unit = read('systemd', 'nanoclaw-whisper.service');
-    expect(unit).toContain('User=nanoclaw-whisper');
-    expect(unit).toContain('Group=nanoclaw-whisper');
+  it('runs the pinned Moonshine daemon as a hardened loopback service', () => {
+    const unit = read('systemd', 'nanoclaw-moonshine.service');
+    expect(unit).toContain('User=nanoclaw-stt');
+    expect(unit).toContain('Group=nanoclaw-stt');
     expect(unit).toContain(
-      'ExecStart=/usr/local/bin/whisper-server --model /var/lib/nanoclaw/whisper/ggml-base.en.bin --host 127.0.0.1 --port 8178 --threads 4 --processors 1 --language en --no-timestamps',
+      'ExecStart=/opt/nanoclaw/moonshine-0.0.69/bin/python /opt/nanoclaw/moonshine-server/moonshine_server.py --profile /etc/nanoclaw/stt-selected-profile.json --host 127.0.0.1 --port 8178',
     );
-    expect(unit).not.toContain('--no-context');
     expect(unit).toContain('Restart=on-failure');
     expect(unit).toContain('RestartSec=2');
     expect(unit).toContain('NoNewPrivileges=true');
     expect(unit).toContain('PrivateTmp=true');
     expect(unit).toContain(
-      'ReadOnlyPaths=/var/lib/nanoclaw/whisper /opt/nanoclaw/whisper-v1.9.1',
+      'ReadOnlyPaths=/var/lib/nanoclaw/stt /opt/nanoclaw/moonshine-0.0.69 /opt/nanoclaw/moonshine-server /etc/nanoclaw/stt-selected-profile.json',
     );
     expect(unit).toContain('IPAddressDeny=any');
     expect(unit).toContain('IPAddressAllow=localhost');
     expect(unit).toMatch(/MemoryMax=\d+[MG]/);
   });
 
-  it('orders NanoClaw after Whisper without making it required', () => {
+  it('requires Moonshine before NanoClaw can accept streaming sessions', () => {
     const dropIn = read('systemd', 'nanoclaw.service.d', 'evenhub.conf');
+    expect(dropIn).toContain('Wants=network-online.target');
+    expect(dropIn).toContain('Requires=nanoclaw-moonshine.service');
     expect(dropIn).toContain(
-      'Wants=network-online.target nanoclaw-whisper.service',
+      'After=network-online.target nanoclaw-moonshine.service',
     );
-    expect(dropIn).toContain(
-      'After=network-online.target nanoclaw-whisper.service',
-    );
-    expect(dropIn).not.toContain('Requires=nanoclaw-whisper.service');
     expect(dropIn).toContain('EnvironmentFile=/etc/nanoclaw/evenhub.env');
   });
 
@@ -141,7 +137,7 @@ describe('EvenHub deployment assets', () => {
       permissions: Array<{ name: string; whitelist?: string[] }>;
     };
     expect(packageJson.private).toBe(true);
-    expect(packageJson.version).toBe('0.1.3');
+    expect(packageJson.version).toBe('0.2.1');
     expect(packageJson.dependencies).toEqual({
       '@evenrealities/even_hub_sdk': '0.0.12',
       '@evenrealities/pretext': '0.1.4',
@@ -161,6 +157,7 @@ describe('EvenHub deployment assets', () => {
     ]);
     expect(manifest.permissions[1].whitelist).toEqual([
       'https://nanoclaw.local',
+      'wss://nanoclaw.local',
     ]);
     expect(
       fs
@@ -170,6 +167,47 @@ describe('EvenHub deployment assets', () => {
     expect(
       fs.readFileSync(path.join(root, 'evenhub', 'vite.config.ts'), 'utf8'),
     ).toContain('configuredOrigin !== APPROVED_ORIGIN');
+  });
+
+  it('pins the private Moonshine runtime and leaves selection evidence pending', () => {
+    const lock = read('moonshine', 'requirements-aarch64-py313.lock');
+    expect(lock).toContain(
+      'moonshine-voice==0.0.69 --hash=sha256:1cda44b5cd3869e1b9165715de211d342b6de52bdd51bf99b79a1e44bd0f20e7',
+    );
+    const requirementLines = lock
+      .trim()
+      .split('\n')
+      .filter((line) => !line.startsWith('#'));
+    expect(
+      requirementLines.every((line) =>
+        /==[^ ]+ --hash=sha256:[a-f0-9]{64}$/.test(line),
+      ),
+    ).toBe(true);
+    const profile = JSON.parse(read('moonshine', 'selected-profile.json')) as {
+      selectionStatus: string;
+      components: unknown[];
+      evidence: unknown;
+    };
+    expect(profile).toMatchObject({
+      selectionStatus: 'pending_physical_benchmark',
+      components: [],
+      evidence: null,
+    });
+    const daemon = read('moonshine', 'moonshine_server.py');
+    expect(daemon).toContain('log_output_text": "false"');
+    expect(daemon).toContain('access_log=None');
+    expect(daemon).not.toContain('logging.info(text');
+    expect(daemon).toContain('runtime component hash mismatch');
+    expect(daemon).toContain('runtime lock hash mismatch');
+    expect(daemon).toContain('server hash mismatch');
+    const renderer = read('moonshine', 'render-profile.mjs');
+    expect(renderer).toContain('use select-profile.mjs with passing evidence');
+    expect(renderer).toContain('licenses\\/.*');
+    const selector = read('moonshine', 'select-profile.mjs');
+    expect(selector).toContain("final.decision !== 'pass'");
+    expect(selector).toContain('Object.values(final.gates).every');
+    expect(selector).toContain('Math.ceil(final.metrics.peakRssMiB * 1.25)');
+    expect(selector).toContain('candidate component hashes do not match');
   });
 
   it('documents installation, restart, rollback, and troubleshooting', () => {

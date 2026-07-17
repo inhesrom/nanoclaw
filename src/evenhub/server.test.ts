@@ -43,7 +43,8 @@ describe('EvenHub LAN API', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await server.stop();
     _closeDatabase();
     fs.rmSync(audioDir, { recursive: true, force: true });
   });
@@ -135,7 +136,7 @@ describe('EvenHub LAN API', () => {
   it('reports approved health metadata and gates uploads on readiness', async () => {
     let dependencies = {
       database: 'up' as const,
-      whisper: 'down' as 'up' | 'down',
+      stt: 'down' as 'up' | 'down',
       whatsapp: 'down' as 'up' | 'down',
     };
     server = new EvenHubServer({
@@ -155,15 +156,15 @@ describe('EvenHub LAN API', () => {
       body: {
         status: 'degraded',
         version: '1.2.52',
-        whisper: 'down',
+        stt: 'down',
         whatsapp: 'down',
       },
     });
     expect(Object.keys(health.body as object).sort()).toEqual([
       'status',
+      'stt',
       'version',
       'whatsapp',
-      'whisper',
     ]);
 
     const notReady = await server.inject({
@@ -174,7 +175,7 @@ describe('EvenHub LAN API', () => {
       status: 503,
       body: {
         status: 'not_ready',
-        components: ['whisper', 'whatsapp'],
+        components: ['stt', 'whatsapp'],
       },
     });
 
@@ -196,7 +197,7 @@ describe('EvenHub LAN API', () => {
     });
     expect(fs.readdirSync(audioDir)).toHaveLength(0);
 
-    dependencies = { database: 'up', whisper: 'up', whatsapp: 'up' };
+    dependencies = { database: 'up', stt: 'up', whatsapp: 'up' };
     const ready = await server.inject({
       method: 'GET',
       pathname: '/api/even/v1/readyz',
@@ -205,7 +206,7 @@ describe('EvenHub LAN API', () => {
       status: 200,
       body: {
         status: 'ready',
-        components: ['api', 'database', 'whisper', 'whatsapp'],
+        components: ['api', 'database', 'stt', 'whatsapp'],
       },
     });
   });

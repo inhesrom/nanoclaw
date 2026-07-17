@@ -1,7 +1,12 @@
+import fs from 'fs';
+import path from 'path';
+
 import { STORE_DIR } from '../config.js';
 import { EvenHubBenchmarkCapture } from './benchmark-capture.js';
 import { finalizeBenchmark } from './benchmark-finalize.js';
+import { finalizeBenchmarkV2 } from './benchmark-finalize-v2.js';
 import { runBenchmark } from './benchmark-runner.js';
+import { runBenchmarkV2 } from './benchmark-runner-v2.js';
 
 async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, subcommand, ...rest] = args;
@@ -31,11 +36,13 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     const manifest = requireOption(options, 'manifest');
     const runs = parseInteger(requireOption(options, 'runs'), 'runs');
     const seed = parseInteger(requireOption(options, 'seed'), 'seed');
-    const result = await runBenchmark(manifest, {
-      runs,
-      seed,
-      projectRoot,
-    });
+    const version = (
+      JSON.parse(fs.readFileSync(manifest, 'utf8')) as { version?: unknown }
+    ).version;
+    const result =
+      version === 2
+        ? await runBenchmarkV2(manifest, { runs, seed, projectRoot })
+        : await runBenchmark(manifest, { runs, seed, projectRoot });
     print({ runDir: result.runDir, summary: result.summary });
     return;
   }
@@ -44,7 +51,16 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     const options = parseOptions([subcommand, ...rest].filter(Boolean));
     const runDir = requireOption(options, 'run-dir');
     const intentReview = requireOption(options, 'intent-review');
-    print(finalizeBenchmark(runDir, intentReview, projectRoot));
+    const summaryVersion = (
+      JSON.parse(
+        fs.readFileSync(path.join(runDir, 'run-summary.json'), 'utf8'),
+      ) as { version?: unknown }
+    ).version;
+    print(
+      summaryVersion === 2
+        ? finalizeBenchmarkV2(runDir, intentReview, projectRoot)
+        : finalizeBenchmark(runDir, intentReview, projectRoot),
+    );
     return;
   }
 

@@ -39,8 +39,14 @@ type AppViewState =
   | { kind: 'booting' }
   | { kind: 'pairing'; error?: string }
   | { kind: 'ready' }
-  | { kind: 'recording'; startedAt: number; bytes: number }
-  | { kind: 'stopping' }
+  | {
+      kind: 'recording';
+      startedAt: number;
+      bytes: number;
+      finalText?: string;
+      interimText?: string;
+    }
+  | { kind: 'stopping'; finalText?: string; interimText?: string }
   | { kind: 'uploading'; idempotencyKey: string }
   | {
       kind: 'transcribing';
@@ -76,9 +82,11 @@ export type AppAction =
   | { type: 'PAIRED' }
   | { type: 'RECORD_STARTED'; startedAt: number }
   | { type: 'RECORD_PROGRESS'; bytes: number }
+  | { type: 'TRANSCRIPT_SNAPSHOT'; finalText: string; interimText: string }
   | { type: 'RECORD_STOP_REQUESTED' }
   | { type: 'UPLOAD_STARTED'; idempotencyKey: string }
   | { type: 'TURN_ACCEPTED'; turn: ActiveTurn }
+  | { type: 'STREAM_FINAL'; turn: ActiveTurn; result: ServerTurn }
   | { type: 'TURN_UPDATED'; turn: ActiveTurn; result: ServerTurn }
   | { type: 'POLL_NOTICE'; message: string }
   | {
@@ -131,8 +139,23 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
       return state.kind === 'recording'
         ? { ...state, bytes: action.bytes }
         : state;
+    case 'TRANSCRIPT_SNAPSHOT':
+      return state.kind === 'recording' || state.kind === 'stopping'
+        ? {
+            ...state,
+            finalText: action.finalText,
+            interimText: action.interimText,
+          }
+        : state;
     case 'RECORD_STOP_REQUESTED':
-      return state.kind === 'recording' ? { kind: 'stopping', session } : state;
+      return state.kind === 'recording'
+        ? {
+            kind: 'stopping',
+            finalText: state.finalText,
+            interimText: state.interimText,
+            session,
+          }
+        : state;
     case 'UPLOAD_STARTED':
       return state.kind === 'stopping' || state.kind === 'error'
         ? { kind: 'uploading', idempotencyKey: action.idempotencyKey, session }
@@ -141,6 +164,18 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
       return state.kind === 'uploading'
         ? { kind: 'transcribing', turn: action.turn, session }
         : state;
+    case 'STREAM_FINAL':
+      if (state.kind !== 'stopping') return state;
+      return {
+        kind:
+          action.result.state === 'accepted' ||
+          action.result.state === 'transcribing'
+            ? 'transcribing'
+            : 'thinking',
+        turn: action.turn,
+        transcript: action.result.transcript,
+        session,
+      };
     case 'TURN_UPDATED':
       if (
         state.kind !== 'transcribing' &&

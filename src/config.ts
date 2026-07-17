@@ -16,7 +16,6 @@ const envConfig = readEnvFile([
   'EVENHUB_HOST',
   'EVENHUB_PORT',
   'EVENHUB_PUBLIC_ORIGIN',
-  'EVENHUB_WHISPER_URL',
   'EVENHUB_MAX_AUDIO_BYTES',
   'EVENHUB_PAIRING_TTL_MS',
   'EVENHUB_TURN_RETENTION_MS',
@@ -63,10 +62,9 @@ export const EVENHUB_PUBLIC_ORIGIN =
   process.env.EVENHUB_PUBLIC_ORIGIN ||
   envConfig.EVENHUB_PUBLIC_ORIGIN ||
   'https://nanoclaw.local';
-export const EVENHUB_WHISPER_URL =
-  process.env.EVENHUB_WHISPER_URL ||
-  envConfig.EVENHUB_WHISPER_URL ||
-  'http://127.0.0.1:8178/inference';
+// Fixed production boundary. Model/runtime selection lives in the tracked STT
+// profile consumed by the loopback service, not in NanoClaw's environment.
+export const EVENHUB_STT_URL = 'http://127.0.0.1:8178/v1/transcribe';
 export const EVENHUB_MAX_AUDIO_BYTES = parseInt(
   process.env.EVENHUB_MAX_AUDIO_BYTES ||
     envConfig.EVENHUB_MAX_AUDIO_BYTES ||
@@ -91,7 +89,7 @@ export interface EvenHubRuntimeConfig {
   host: string;
   port: number;
   publicOrigin: string;
-  whisperUrl: string;
+  sttUrl: string;
   maxAudioBytes: number;
   pairingTtlMs: number;
   turnRetentionMs: number;
@@ -102,7 +100,7 @@ export const EVENHUB_RUNTIME_CONFIG: EvenHubRuntimeConfig = {
   host: EVENHUB_HOST,
   port: EVENHUB_PORT,
   publicOrigin: EVENHUB_PUBLIC_ORIGIN,
-  whisperUrl: EVENHUB_WHISPER_URL,
+  sttUrl: EVENHUB_STT_URL,
   maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
   pairingTtlMs: EVENHUB_PAIRING_TTL_MS,
   turnRetentionMs: EVENHUB_TURN_RETENTION_MS,
@@ -112,7 +110,7 @@ const APPROVED_EVENHUB_CONFIG: Omit<EvenHubRuntimeConfig, 'enabled'> = {
   host: '127.0.0.1',
   port: 18791,
   publicOrigin: 'https://nanoclaw.local',
-  whisperUrl: 'http://127.0.0.1:8178/inference',
+  sttUrl: 'http://127.0.0.1:8178/v1/transcribe',
   maxAudioBytes: 960_000,
   pairingTtlMs: 300_000,
   turnRetentionMs: 604_800_000,

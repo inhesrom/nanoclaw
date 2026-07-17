@@ -15,6 +15,7 @@ interface G2RecorderOptions {
     | 'recordingProgress'
     | 'recordingStopped'
     | 'recordingFailed'
+    | 'streamPcm'
     | 'submit'
   >;
   audioSource: AudioInputSource;
@@ -90,6 +91,7 @@ export class G2Recorder {
     const chunk = new Uint8Array(pcm.slice(0, remaining));
     this.chunks.push(chunk);
     this.bytes += chunk.length;
+    this.options.controller.streamPcm(chunk);
     const tenth = Math.floor(this.bytes / 3_200);
     if (tenth !== this.reportedTenth) {
       this.reportedTenth = tenth;
@@ -112,6 +114,12 @@ export class G2Recorder {
     this.reportedTenth = -1;
 
     this.options.controller.recordingStopped();
+    const finalizing =
+      durationMs >= 250
+        ? Promise.resolve().then(() =>
+            this.options.controller.submit(pcm, durationMs),
+          )
+        : undefined;
     await this.closeMicrophone();
 
     try {
@@ -121,7 +129,7 @@ export class G2Recorder {
         );
         return;
       }
-      await this.options.controller.submit(pcm, durationMs);
+      await finalizing;
     } finally {
       this.stopping = false;
     }

@@ -168,13 +168,17 @@ function glassesView(state: AppState): { body: string; pager: string } {
       };
     case 'recording':
       return {
-        body: `Recording…\n\n${(state.bytes / 32_000).toFixed(1)} seconds`,
+        body: snapshotText(state)
+          ? `Recording… ${(state.bytes / 32_000).toFixed(1)}s\n\n${snapshotText(state)}`
+          : `Recording…\n\n${(state.bytes / 32_000).toFixed(1)} seconds`,
         pager: 'Tap: send',
       };
     case 'stopping':
       return {
-        body: 'Audio captured\n\nStopping microphone…',
-        pager: 'Timer stopped',
+        body: snapshotText(state)
+          ? `Captured · finalizing\n\n${snapshotText(state)}`
+          : 'Captured · finalizing',
+        pager: 'Timer frozen',
       };
     case 'uploading':
       return {
@@ -184,7 +188,7 @@ function glassesView(state: AppState): { body: string; pager: string } {
     case 'transcribing':
       return {
         body: state.notice || state.transcript || 'Transcribing locally…',
-        pager: 'Whisper on NanoClaw host',
+        pager: 'Local STT on NanoClaw host',
       };
     case 'thinking':
       return {
@@ -206,4 +210,10 @@ function glassesView(state: AppState): { body: string; pager: string } {
         pager: state.retryable ? 'Retry in companion' : 'Return in companion',
       };
   }
+}
+
+function snapshotText(
+  state: Extract<AppState, { kind: 'recording' | 'stopping' }>,
+): string {
+  return [state.finalText, state.interimText].filter(Boolean).join(' ').trim();
 }

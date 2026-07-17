@@ -12,6 +12,7 @@ nanoclaw.local {
 
 	@evenhub path /api/even/*
 	handle @evenhub {
+		# Caddy forwards WebSocket upgrades on the same least-scope API route.
 		reverse_proxy 127.0.0.1:18791
 	}
 

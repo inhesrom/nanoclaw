@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AudioInputSource } from '@evenrealities/even_hub_sdk';
 
-import type { EvenHubApiPort } from '../src/api';
+import type { EvenHubApiPort, LiveTurn } from '../src/api';
 import { TurnController } from '../src/controller';
 import { routeHubInteraction } from '../src/event-routing';
 import { G2Recorder } from '../src/recorder';
@@ -20,6 +20,56 @@ class MemoryStorage implements StoragePort {
 }
 
 describe('G2Recorder', () => {
+  it('opens the live session before microphone readiness and streams each chunk', async () => {
+    let releaseOpen!: () => void;
+    const openPending = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    const push = vi.fn<LiveTurn['push']>();
+    const startLiveTurn = vi.fn<NonNullable<EvenHubApiPort['startLiveTurn']>>(
+      () => ({ push, finish: vi.fn(), abort: vi.fn() }),
+    );
+    const controller = new TurnController({
+      api: {
+        pair: vi.fn(),
+        submitTurn: vi.fn(),
+        startLiveTurn,
+        getTurn: vi.fn(),
+      },
+      storage: new MemoryStorage(),
+      paginateAnswer: (answer) => [answer],
+      onState: () => undefined,
+      createIdempotencyKey: () => 'key-live',
+    });
+    const recorder = new G2Recorder({
+      bridge: {
+        async audioControl(open) {
+          if (open) await openPending;
+          return true;
+        },
+      },
+      controller,
+      audioSource: AudioInputSource.Glasses,
+      scheduleStop: () => 1,
+      cancelStop: () => undefined,
+    });
+    await controller.boot();
+
+    const starting = recorder.start();
+    expect(startLiveTurn).toHaveBeenCalledWith(
+      'token',
+      'key-live',
+      expect.any(Function),
+    );
+    releaseOpen();
+    await starting;
+    const chunk = new Uint8Array([1, 2, 3, 4]);
+    recorder.pushPcm(chunk);
+
+    expect(push).toHaveBeenCalledWith(chunk);
+    await recorder.cancel();
+  });
+
   it('freezes PCM and leaves recording before slow microphone close completes', async () => {
     let releaseClose!: () => void;
     const closePending = new Promise<void>((resolve) => {
@@ -84,10 +134,12 @@ describe('G2Recorder', () => {
       releaseClose = resolve;
     });
     const states: string[] = [];
+    const abort = vi.fn();
     const controller = new TurnController({
       api: {
         pair: vi.fn(),
         submitTurn: vi.fn(),
+        startLiveTurn: () => ({ push: vi.fn(), finish: vi.fn(), abort }),
         getTurn: vi.fn(),
       },
       storage: new MemoryStorage(),
@@ -121,6 +173,7 @@ describe('G2Recorder', () => {
       retryable: false,
     });
     expect(states).toContain('stopping');
+    expect(abort).toHaveBeenCalledOnce();
   });
 });
 

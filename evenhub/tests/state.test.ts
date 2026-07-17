@@ -67,6 +67,30 @@ describe('EvenHub app reducer', () => {
     });
   });
 
+  it('carries complete transcript snapshots through immediate stop feedback', () => {
+    const ready = reduceAppState(initialState, {
+      type: 'RESTORED',
+      hasToken: true,
+    });
+    const recording = reduceAppState(ready, {
+      type: 'RECORD_STARTED',
+      startedAt: 10,
+    });
+    const snapshot = reduceAppState(recording, {
+      type: 'TRANSCRIPT_SNAPSHOT',
+      finalText: 'book the',
+      interimText: 'window seat',
+    });
+
+    expect(
+      reduceAppState(snapshot, { type: 'RECORD_STOP_REQUESTED' }),
+    ).toMatchObject({
+      kind: 'stopping',
+      finalText: 'book the',
+      interimText: 'window seat',
+    });
+  });
+
   it('ignores impossible recording transitions', () => {
     const pairing = reduceAppState(initialState, {
       type: 'RESTORED',

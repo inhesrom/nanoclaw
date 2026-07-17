@@ -1,0 +1,33 @@
+[Unit]
+Description=NanoClaw local Moonshine streaming inference
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=nanoclaw-stt
+Group=nanoclaw-stt
+ExecStart=/opt/nanoclaw/moonshine-0.0.69/bin/python /opt/nanoclaw/moonshine-server/moonshine_server.py --profile /etc/nanoclaw/stt-selected-profile.json --host 127.0.0.1 --port 8178
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+ReadOnlyPaths=/var/lib/nanoclaw/stt /opt/nanoclaw/moonshine-0.0.69 /opt/nanoclaw/moonshine-server /etc/nanoclaw/stt-selected-profile.json
+# Conservative candidate ceiling. Replace with ceil(peak RSS * 1.25) MiB only
+# after a passing physical benchmark and record it in the selected profile.
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

@@ -1,13 +1,18 @@
-# EvenHub local Whisper runtime
+# EvenHub Whisper rollback snapshot
 
-The EvenHub host uses `whisper.cpp` `v1.9.1` with the unquantized English
-`base.en` model. The runtime is a separate loopback-only process; NanoClaw owns
-PCM validation, WAV framing, FIFO retries, and durable transcript storage.
+Whisper is no longer the production STT service. Preserve the prior
+`whisper.cpp` `v1.9.1` runtime, `base.en` model, unit/configuration snapshot, and
+benchmark reports for rollback only. Never run it concurrently with Moonshine;
+both use loopback port 8178.
 
-## Pinned assets
+The historical verified inputs are:
 
-Before installing either downloaded asset, verify the official arm64 release
-archive and model together:
+- whisper.cpp v1.9.1 arm64 archive SHA-256:
+  `e0b66cd551ff6f2a28fabe3c6e89691eea037bb76833493abb9a71ca788994b3`
+- `ggml-base.en.bin` SHA-1:
+  `137c40403d78fd54d454da0f9bd998f78703390c`
+
+They can still be checked with:
 
 ```bash
 npm run evenhub:whisper:verify -- \
@@ -15,53 +20,7 @@ npm run evenhub:whisper:verify -- \
   /var/lib/nanoclaw/whisper/ggml-base.en.bin
 ```
 
-The verifier requires these published digests:
-
-- `whisper.cpp` v1.9.1 arm64 archive SHA-256:
-  `e0b66cd551ff6f2a28fabe3c6e89691eea037bb76833493abb9a71ca788994b3`
-- `ggml-base.en.bin` SHA-1:
-  `137c40403d78fd54d454da0f9bd998f78703390c`
-
-Do not enable the host if verification fails. The first Pi target is a 64-bit
-OS with active cooling and no overclock.
-
-## Runtime command
-
-Start the verified binary with the model preloaded:
-
-```bash
-whisper-server \
-  --model /var/lib/nanoclaw/whisper/ggml-base.en.bin \
-  --host 127.0.0.1 --port 8178 \
-  --threads 4 --processors 1 \
-  --language en --no-timestamps
-```
-
-The v1.9.1 server sets `no_context=true` internally. It does not expose a
-`--no-context` command-line option; passing that flag makes the process exit.
-
-NanoClaw defaults `EVENHUB_WHISPER_URL` to
-`http://127.0.0.1:8178/inference`. Each request is a canonical 16-bit,
-16 kHz, mono WAV multipart upload with JSON output, temperature `0.0`, an empty
-prompt, and `carry_initial_prompt=false`.
-
-Only one inference runs at a time. Transport and 5xx failures are retried once
-after one second. The durable turn becomes `stt_unavailable` after exhaustion,
-`stt_unintelligible` for empty speech, or `invalid_audio` for malformed input.
-Raw PCM is removed only after the transcript or terminal STT failure is stored.
-
-## Local verification
-
-```bash
-npm run typecheck
-npx vitest run src/evenhub/wav.test.ts \
-  src/evenhub/whisper-client.test.ts \
-  src/evenhub/whisper-worker.test.ts \
-  src/evenhub/whisper-assets.test.ts \
-  src/evenhub/server.test.ts
-```
-
-Tests use synthetic PCM and a fake loopback response. The physical G2 corpus,
-Pi latency/accuracy gate, and throttling check remain hardware rollout work.
-Use [the physical benchmark runbook](evenhub-whisper-benchmark.md) for capture,
-the five randomized runs, manual intent review, and model selection.
+The old loopback command, whole-WAV request path, and version-1 benchmark remain
+historical compatibility surfaces, not release acceptance. Restore them only
+through the reviewed pre-Moonshine snapshot after disabling EvenHub and stopping
+Moonshine. See the [LAN rollback procedure](evenhub-lan-deployment.md#rollback).

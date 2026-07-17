@@ -10,9 +10,7 @@ import {
   getActiveEvenDevices,
   getEvenPairingAttempt,
   getEvenPairingCode,
-  getEvenTurnByIdempotencyKey,
   getEvenTurnForDevice,
-  insertEvenTurn,
   recordEvenPairingFailure,
   touchEvenDevice,
   transitionEvenTurnState,
@@ -26,6 +24,9 @@ import type {
   EvenHubDependencySnapshot,
   EvenHubReadinessProbe,
 } from './readiness.js';
+import type { SttStreamingProvider } from './stt-client.js';
+import { EvenHubStreamingGateway, StreamProtocolError } from './streaming.js';
+import { EvenTurnFinalizer, TurnFinalizationError } from './turn-finalizer.js';
 
 const AUDIO_CONTENT_TYPE = 'audio/L16;rate=16000;channels=1';
 const MAX_JSON_BYTES = 16 * 1024;
@@ -44,6 +45,9 @@ export interface EvenHubServerOptions {
   pairingTtlMs?: number;
   processor?: EvenTurnProcessor;
   readiness?: EvenHubReadinessProbe;
+  publicOrigin?: string;
+  streamingStt?: SttStreamingProvider;
+  finalizer?: EvenTurnFinalizer;
   version?: string;
 }
 
@@ -247,17 +251,37 @@ function validateTurnHeaders(request: IncomingMessage): {
 
 export class EvenHubServer {
   private readonly maxAudioBytes: number;
+  private readonly finalizer: EvenTurnFinalizer;
+  private readonly streaming?: EvenHubStreamingGateway;
+  private readonly processorTasks = new Set<Promise<void>>();
   private server?: http.Server;
 
   constructor(private readonly options: EvenHubServerOptions) {
     this.maxAudioBytes = options.maxAudioBytes ?? 960_000;
+    this.finalizer =
+      options.finalizer ??
+      new EvenTurnFinalizer({
+        audioDir: options.audioDir,
+        maxAudioBytes: this.maxAudioBytes,
+      });
+    if (options.streamingStt) {
+      if (!options.publicOrigin) {
+        throw new Error('publicOrigin is required when streaming is enabled');
+      }
+      this.streaming = new EvenHubStreamingGateway({
+        audioDir: options.audioDir,
+        publicOrigin: options.publicOrigin,
+        stt: options.streamingStt,
+        finalizer: this.finalizer,
+      });
+    }
   }
 
   private async dependencies(): Promise<EvenHubDependencySnapshot> {
     return (
       (await this.options.readiness?.snapshot()) ?? {
         database: 'up',
-        whisper: 'up',
+        stt: 'up',
         whatsapp: 'up',
       }
     );
@@ -267,6 +291,13 @@ export class EvenHubServer {
     if (this.server) return;
     this.server = http.createServer((request, response) => {
       void this.handle(request, response);
+    });
+    this.server.on('upgrade', (request, socket, head) => {
+      if (this.streaming) {
+        this.streaming.handleUpgrade(request, socket, head);
+        return;
+      }
+      socket.destroy();
     });
     await new Promise<void>((resolve, reject) => {
       this.server!.once('error', reject);
@@ -280,11 +311,13 @@ export class EvenHubServer {
   async stop(): Promise<void> {
     const current = this.server;
     this.server = undefined;
-    if (!current) return;
-    if (!current.listening) return;
-    await new Promise<void>((resolve, reject) => {
-      current.close((error) => (error ? reject(error) : resolve()));
-    });
+    await this.streaming?.stop();
+    if (current?.listening) {
+      await new Promise<void>((resolve, reject) => {
+        current.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+    await Promise.allSettled([...this.processorTasks]);
   }
 
   address(): { host: string; port: number } {
@@ -365,7 +398,7 @@ export class EvenHubServer {
             ? 'ok'
             : 'degraded',
           version: this.options.version ?? 'unknown',
-          whisper: dependencies.whisper,
+          stt: dependencies.stt,
           whatsapp: dependencies.whatsapp,
         });
         return;
@@ -379,7 +412,7 @@ export class EvenHubServer {
           status: unavailable.length === 0 ? 'ready' : 'not_ready',
           components:
             unavailable.length === 0
-              ? ['api', 'database', 'whisper', 'whatsapp']
+              ? ['api', 'database', 'stt', 'whatsapp']
               : unavailable,
         });
         return;
@@ -392,6 +425,13 @@ export class EvenHubServer {
         await this.handleCreateTurn(request, response);
         return;
       }
+      if (
+        request.method === 'POST' &&
+        pathname === '/api/even/v1/stt-sessions'
+      ) {
+        await this.handleCreateSttSession(request, response);
+        return;
+      }
       const turnMatch = pathname.match(/^\/api\/even\/v1\/turns\/([^/]+)$/);
       if (request.method === 'GET' && turnMatch) {
         this.handleGetTurn(request, response, turnMatch[1]);
@@ -401,6 +441,18 @@ export class EvenHubServer {
     } catch (error) {
       if (error instanceof ApiError) {
         sendError(response, error);
+        return;
+      }
+      if (error instanceof TurnFinalizationError) {
+        sendError(
+          response,
+          new ApiError(
+            error.status,
+            error.code,
+            error.message,
+            error.retryable,
+          ),
+        );
         return;
       }
       logger.error(
@@ -565,118 +617,99 @@ export class EvenHubServer {
       this.options.audioDir,
       this.maxAudioBytes,
     );
-    if (written.size % 2 !== 0) {
-      fs.rmSync(written.tempPath, { force: true });
-      throw new ApiError(
-        422,
-        'invalid_audio',
-        'PCM audio must contain complete signed 16-bit samples',
-      );
-    }
-    const expectedBytes = durationMs * 32;
-    if (written.size === 0 || Math.abs(written.size - expectedBytes) > 640) {
-      fs.rmSync(written.tempPath, { force: true });
-      throw new ApiError(
-        422,
-        'audio_duration_mismatch',
-        'PCM byte count does not match the declared duration',
-      );
-    }
-
-    const existing = getEvenTurnByIdempotencyKey(device.id, idempotencyKey);
-    if (existing) {
-      fs.rmSync(written.tempPath, { force: true });
-      if (existing.request_sha256 !== written.sha256) {
-        logger.warn(
-          { turn_id: existing.id, state: existing.state },
-          'even.idempotency_mismatch',
-        );
-        throw new ApiError(
-          409,
-          'idempotency_payload_mismatch',
-          'Idempotency-Key was already used with different audio',
-        );
-      }
-      sendJson(response, 200, toPublicEvenTurn(existing), {
-        'Idempotency-Replayed': 'true',
-      });
-      return;
-    }
-
-    const id = createUuidV7();
-    const finalPath = path.join(this.options.audioDir, `${id}.pcm`);
-    const timestamp = new Date().toISOString();
-    fs.renameSync(written.tempPath, finalPath);
-    const turn: EvenTurn = {
-      id,
-      device_id: device.id,
-      idempotency_key: idempotencyKey,
-      request_sha256: written.sha256,
-      audio_path: finalPath,
-      audio_duration_ms: durationMs,
-      state: 'accepted',
-      transcript: null,
-      whatsapp_message_id: null,
-      answer: null,
-      error_code: null,
-      error_message: null,
-      stt_attempts: 0,
-      created_at: timestamp,
-      updated_at: timestamp,
-      completed_at: null,
-    };
-    try {
-      insertEvenTurn(turn);
-    } catch (error) {
-      fs.rmSync(finalPath, { force: true });
-      const raced = getEvenTurnByIdempotencyKey(device.id, idempotencyKey);
-      if (!raced) throw error;
-      if (raced.request_sha256 !== written.sha256) {
-        logger.warn(
-          { turn_id: raced.id, state: raced.state },
-          'even.idempotency_mismatch',
-        );
-        throw new ApiError(
-          409,
-          'idempotency_payload_mismatch',
-          'Idempotency-Key was already used with different audio',
-        );
-      }
-      sendJson(response, 200, toPublicEvenTurn(raced), {
-        'Idempotency-Replayed': 'true',
-      });
-      return;
-    }
-
-    sendJson(response, 202, toPublicEvenTurn(turn));
-    logger.info(
-      {
-        turn_id: id,
-        state: 'accepted',
-        audio_duration_ms: durationMs,
-        audio_bytes: written.size,
-      },
-      'even.turn.accepted',
+    const accepted = this.finalizer.accept(device, idempotencyKey, {
+      ...written,
+      durationMs,
+    });
+    sendJson(
+      response,
+      accepted.created ? 202 : 200,
+      toPublicEvenTurn(accepted.turn),
+      accepted.created ? {} : { 'Idempotency-Replayed': 'true' },
     );
-    if (this.options.processor) {
-      setImmediate(() => {
-        void this.options.processor!.process(turn).catch((error) => {
+    if (accepted.created && this.options.processor) {
+      const task = new Promise<void>((resolve) => setImmediate(resolve))
+        .then(() => this.options.processor!.process(accepted.turn))
+        .catch((error) => {
           logger.error(
             {
-              turn_id: id,
+              turn_id: accepted.turn.id,
               state: 'accepted',
               error_type: error instanceof Error ? error.name : 'UnknownError',
             },
             'even.turn_processor_failed',
           );
-          const failedAt = new Date().toISOString();
-          transitionEvenTurnState(id, 'accepted', 'failed', {
-            errorCode: 'processor_failed',
-            errorMessage: 'Turn processing failed',
-            completedAt: failedAt,
-          });
+          try {
+            const failedAt = new Date().toISOString();
+            transitionEvenTurnState(accepted.turn.id, 'accepted', 'failed', {
+              errorCode: 'processor_failed',
+              errorMessage: 'Turn processing failed',
+              completedAt: failedAt,
+            });
+          } catch (recoveryError) {
+            logger.error(
+              {
+                turn_id: accepted.turn.id,
+                state: 'accepted',
+                error_type:
+                  recoveryError instanceof Error
+                    ? recoveryError.name
+                    : 'UnknownError',
+              },
+              'even.turn_processor_recovery_failed',
+            );
+          }
         });
-      });
+      this.processorTasks.add(task);
+      void task.finally(() => this.processorTasks.delete(task));
+    }
+  }
+
+  private async handleCreateSttSession(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    if (!this.streaming) {
+      throw new ApiError(
+        503,
+        'stt_unavailable',
+        'Local speech recognition is unavailable',
+        true,
+      );
+    }
+    const dependencies = await this.dependencies();
+    if (dependencies.database === 'down' || dependencies.stt === 'down') {
+      throw new ApiError(
+        503,
+        'not_ready',
+        'EvenHub is waiting for local speech recognition',
+        true,
+      );
+    }
+    const device = authorize(request);
+    const body = await readJson(request);
+    const idempotencyKey =
+      body && typeof body === 'object'
+        ? (body as Record<string, unknown>).idempotencyKey
+        : undefined;
+    if (typeof idempotencyKey !== 'string') {
+      throw new ApiError(
+        400,
+        'invalid_idempotency_key',
+        'idempotencyKey must be a UUIDv4',
+      );
+    }
+    try {
+      sendJson(
+        response,
+        201,
+        this.streaming.createSession(device, idempotencyKey),
+      );
+    } catch (error) {
+      if (error instanceof StreamProtocolError) {
+        throw new ApiError(400, error.code, error.message, error.retryable);
+      }
+      throw error;
     }
   }
 

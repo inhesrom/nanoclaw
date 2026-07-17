@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   EvenHubApiError,
   type EvenHubApiPort,
+  type LiveTurn,
   type PairResult,
 } from '../src/api';
 import { TurnController } from '../src/controller';
@@ -104,6 +105,48 @@ describe('TurnController', () => {
     await controller.submit(new Uint8Array(8_000), 250);
 
     expect(keys).toEqual(['fixed-key', 'fixed-key']);
+    expect(controller.state.kind).toBe('answer');
+  });
+
+  it('falls back with retained PCM and the same key when live finalization fails', async () => {
+    const storage = new MemoryStorage(new Map([[STORAGE_KEYS.token, 'token']]));
+    const pushed: Uint8Array[] = [];
+    const finish = vi.fn<LiveTurn['finish']>(async () => {
+      throw new Error('final response lost');
+    });
+    const submitTurn = vi.fn<EvenHubApiPort['submitTurn']>(
+      async (_token, _pcm, _durationMs, _key) => completedTurn,
+    );
+    const startLiveTurn = vi.fn<NonNullable<EvenHubApiPort['startLiveTurn']>>(
+      () => ({
+        push: (pcm) => pushed.push(new Uint8Array(pcm)),
+        finish,
+        abort: vi.fn(),
+      }),
+    );
+    const controller = new TurnController({
+      api: api({ startLiveTurn, submitTurn }),
+      storage,
+      paginateAnswer: () => ['answer'],
+      onState: () => undefined,
+      createIdempotencyKey: () => 'hybrid-key',
+    });
+    const pcm = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    await controller.boot();
+
+    controller.startRecording(100);
+    controller.streamPcm(pcm.subarray(0, 4));
+    controller.recordingStopped();
+    await controller.submit(pcm, 250);
+
+    expect(startLiveTurn).toHaveBeenCalledWith(
+      'token',
+      'hybrid-key',
+      expect.any(Function),
+    );
+    expect(pushed).toEqual([new Uint8Array([1, 2, 3, 4])]);
+    expect(finish).toHaveBeenCalledWith(pcm, 250);
+    expect(submitTurn).toHaveBeenCalledWith('token', pcm, 250, 'hybrid-key');
     expect(controller.state.kind).toBe('answer');
   });
 

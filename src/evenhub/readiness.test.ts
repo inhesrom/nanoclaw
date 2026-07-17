@@ -6,7 +6,7 @@ describe('EvenHubReadiness', () => {
   it('maps check failures to down without exposing error details', async () => {
     const readiness = new EvenHubReadiness({
       database: () => true,
-      whisper: () => {
+      stt: () => {
         throw new Error('private endpoint detail');
       },
       whatsapp: () => false,
@@ -15,17 +15,17 @@ describe('EvenHubReadiness', () => {
 
     await expect(readiness.snapshot()).resolves.toEqual({
       database: 'up',
-      whisper: 'down',
+      stt: 'down',
       whatsapp: 'down',
     });
   });
 
   it('shares and briefly caches dependency probes', async () => {
     let now = 1_000;
-    const whisper = vi.fn(async () => true);
+    const stt = vi.fn(async () => true);
     const readiness = new EvenHubReadiness({
       database: () => true,
-      whisper,
+      stt,
       whatsapp: () => true,
       cacheMs: 1_000,
       now: () => now,
@@ -33,10 +33,10 @@ describe('EvenHubReadiness', () => {
 
     await Promise.all([readiness.snapshot(), readiness.snapshot()]);
     await readiness.snapshot();
-    expect(whisper).toHaveBeenCalledOnce();
+    expect(stt).toHaveBeenCalledOnce();
 
     now = 2_001;
     await readiness.snapshot();
-    expect(whisper).toHaveBeenCalledTimes(2);
+    expect(stt).toHaveBeenCalledTimes(2);
   });
 });

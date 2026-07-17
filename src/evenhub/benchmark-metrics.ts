@@ -22,9 +22,18 @@ export function createPiMetricsCollector(
   binaryPath: string,
   modelPath: string,
 ): MetricsCollector {
+  return createSttMetricsCollector([path.basename(binaryPath), modelPath]);
+}
+
+export function createSttMetricsCollector(
+  processMarkers: readonly string[],
+): MetricsCollector {
+  if (processMarkers.length === 0) {
+    throw new Error('at least one STT process marker is required');
+  }
   return {
     sample: () => ({
-      rssMiB: findWhisperRssMiB(binaryPath, modelPath),
+      rssMiB: findSttRssMiB(processMarkers),
       cpuTempC: readCpuTemperature(),
       throttling: readThrottlingFlags(),
     }),
@@ -68,10 +77,7 @@ export function mergeMetrics(
   };
 }
 
-function findWhisperRssMiB(
-  binaryPath: string,
-  modelPath: string,
-): number | null {
+function findSttRssMiB(processMarkers: readonly string[]): number | null {
   let peakKb: number | null = null;
   let entries: string[];
   try {
@@ -84,10 +90,7 @@ function findWhisperRssMiB(
       const cmdline = fs
         .readFileSync(path.join('/proc', pid, 'cmdline'), 'utf8')
         .replace(/\0/g, ' ');
-      if (
-        !cmdline.includes(modelPath) ||
-        !cmdline.includes(path.basename(binaryPath))
-      ) {
+      if (!processMarkers.every((marker) => cmdline.includes(marker))) {
         continue;
       }
       const status = fs.readFileSync(path.join('/proc', pid, 'status'), 'utf8');

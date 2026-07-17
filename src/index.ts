@@ -12,8 +12,9 @@ import {
   EVENHUB_MAX_AUDIO_BYTES,
   EVENHUB_PAIRING_TTL_MS,
   EVENHUB_PORT,
+  EVENHUB_PUBLIC_ORIGIN,
+  EVENHUB_STT_URL,
   EVENHUB_TURN_RETENTION_MS,
-  EVENHUB_WHISPER_URL,
   validateEvenHubRuntimeConfig,
   getTriggerPattern,
   GROUPS_DIR,
@@ -86,8 +87,9 @@ import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 import { EvenHubServer } from './evenhub/server.js';
-import { WhisperClient } from './evenhub/whisper-client.js';
+import { MoonshineClient } from './evenhub/stt-client.js';
 import { EvenHubSttWorker } from './evenhub/whisper-worker.js';
+import { EvenTurnFinalizer } from './evenhub/turn-finalizer.js';
 import {
   EvenHubWhatsAppBridge,
   type EvenHubWhatsAppTarget,
@@ -756,14 +758,25 @@ async function main(): Promise<void> {
     evenHubWhatsAppBridge = new EvenHubWhatsAppBridge({
       getTarget: getEvenHubWhatsAppTarget,
     });
-    const whisper = new WhisperClient(EVENHUB_WHISPER_URL);
+    const stt = new MoonshineClient(EVENHUB_STT_URL);
+    const capture = new EvenHubBenchmarkCapture(
+      STORE_DIR,
+      process.cwd(),
+      logger,
+    );
     const readiness = new EvenHubReadiness({
       database: isDatabaseReady,
-      whisper: () => whisper.isHealthy(),
+      stt: () => stt.isHealthy(),
       whatsapp: isEvenHubWhatsAppReady,
     });
-    evenHubSttWorker = new EvenHubSttWorker(whisper, {
-      capture: new EvenHubBenchmarkCapture(STORE_DIR, process.cwd(), logger),
+    const finalizer = new EvenTurnFinalizer({
+      audioDir: evenHubAudioDir,
+      maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
+      capture,
+      onDispatchReady: () => evenHubWhatsAppBridge?.requestDispatch(),
+    });
+    evenHubSttWorker = new EvenHubSttWorker(stt, {
+      capture,
       maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
       onDispatchReady: () => evenHubWhatsAppBridge?.requestDispatch(),
     });
@@ -776,6 +789,9 @@ async function main(): Promise<void> {
       pairingTtlMs: EVENHUB_PAIRING_TTL_MS,
       processor: evenHubSttWorker,
       readiness,
+      publicOrigin: EVENHUB_PUBLIC_ORIGIN,
+      streamingStt: stt,
+      finalizer,
       version: getNanoClawVersion(),
     });
     await evenHubServer.start();

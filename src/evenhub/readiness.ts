@@ -2,7 +2,7 @@ export type EvenHubComponentState = 'up' | 'down';
 
 export interface EvenHubDependencySnapshot {
   database: EvenHubComponentState;
-  whisper: EvenHubComponentState;
+  stt: EvenHubComponentState;
   whatsapp: EvenHubComponentState;
 }
 
@@ -12,7 +12,7 @@ export interface EvenHubReadinessProbe {
 
 export interface EvenHubReadinessOptions {
   database: () => boolean | Promise<boolean>;
-  whisper: () => boolean | Promise<boolean>;
+  stt: () => boolean | Promise<boolean>;
   whatsapp: () => boolean | Promise<boolean>;
   cacheMs?: number;
   now?: () => number;
@@ -56,11 +56,11 @@ export class EvenHubReadiness implements EvenHubReadinessProbe {
   }
 
   private async sample(): Promise<EvenHubDependencySnapshot> {
-    const [database, whisper, whatsapp] = await Promise.all([
+    const [database, stt, whatsapp] = await Promise.all([
       probe(this.options.database),
-      probe(this.options.whisper),
+      probe(this.options.stt),
       probe(this.options.whatsapp),
     ]);
-    return { database, whisper, whatsapp };
+    return { database, stt, whatsapp };
   }
 }

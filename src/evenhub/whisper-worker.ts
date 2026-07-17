@@ -10,12 +10,12 @@ import {
 import { logger as defaultLogger } from '../logger.js';
 import type { EvenTurn } from './types.js';
 import type { EvenTurnProcessor } from './server.js';
-import { createCanonicalWav, validateEvenHubPcm } from './wav.js';
+import { validateEvenHubPcm } from './wav.js';
 import {
-  WhisperClientError,
+  SttClientError,
   normalizeTranscript,
-  type WhisperTranscriber,
-} from './whisper-client.js';
+  type SttTranscriber,
+} from './stt-client.js';
 
 interface WorkerLogger {
   info(data: Record<string, unknown>, message: string): void;
@@ -52,7 +52,7 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
   private idleWaiters: Array<() => void> = [];
 
   constructor(
-    private readonly transcriber: WhisperTranscriber,
+    private readonly transcriber: SttTranscriber,
     options: EvenHubSttWorkerOptions = {},
   ) {
     this.delay = options.delay ?? defaultDelay;
@@ -139,7 +139,6 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
       this.logger.warn({ turn_id: turn.id }, 'even.capture_hook_failed');
     }
 
-    const wav = createCanonicalWav(pcm);
     let attempts = turn.stt_attempts;
     while (attempts < 2) {
       attempts = incrementEvenTurnSttAttempts(turn.id);
@@ -157,7 +156,7 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
       );
       try {
         const transcript = normalizeTranscript(
-          await this.transcriber.transcribe(wav),
+          await this.transcriber.transcribe(pcm),
         );
         if (!transcript) {
           this.failTurn(
@@ -191,8 +190,7 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
         this.onDispatchReady?.();
         return;
       } catch (error) {
-        const retryable =
-          !(error instanceof WhisperClientError) || error.retryable;
+        const retryable = !(error instanceof SttClientError) || error.retryable;
         if (retryable && attempts < 2) {
           await this.delay(1_000);
           continue;

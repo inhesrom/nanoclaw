@@ -8,6 +8,7 @@ import {
   type BenchmarkSample,
   type CorpusNoise,
 } from './benchmark-corpus.js';
+import type { BenchmarkManifestV2 } from './benchmark-corpus-v2.js';
 
 export function createBenchmarkFixture(root: string): {
   manifest: BenchmarkManifest;
@@ -82,4 +83,56 @@ export function createBenchmarkFixture(root: string): {
     mode: 0o600,
   });
   return { manifest, manifestPath, projectRoot };
+}
+
+export function createBenchmarkFixtureV2(root: string): {
+  manifest: BenchmarkManifestV2;
+  manifestPath: string;
+  projectRoot: string;
+} {
+  const v1 = createBenchmarkFixture(root);
+  const modelPath = path.join(root, 'moonshine-model');
+  const runtimePath = path.join(root, 'moonshine-runtime');
+  fs.mkdirSync(modelPath, { mode: 0o700 });
+  fs.mkdirSync(runtimePath, { mode: 0o700 });
+  const modelComponent = path.join(modelPath, 'encoder.ort');
+  const runtimeComponent = path.join(runtimePath, 'libmoonshine.so');
+  const lockfilePath = path.join(root, 'requirements.lock');
+  const serverPath = path.join(root, 'moonshine-server.py');
+  fs.writeFileSync(modelComponent, 'model-v2', { mode: 0o600 });
+  fs.writeFileSync(runtimeComponent, 'runtime-v2', { mode: 0o600 });
+  fs.writeFileSync(lockfilePath, 'lock-v2', { mode: 0o600 });
+  fs.writeFileSync(serverPath, 'server-v2', { mode: 0o600 });
+  const manifest: BenchmarkManifestV2 = {
+    version: 2,
+    sessionId: v1.manifest.sessionId,
+    createdAt: v1.manifest.createdAt,
+    environment: {
+      g2Firmware: 'test-g2',
+      evenHubApp: '0.2.1',
+      phone: 'test-phone',
+      pi: 'test-pi',
+    },
+    stt: {
+      provider: 'moonshine',
+      streamingProtocol: 'nanoclaw-stt-v1',
+      serviceEndpoint: 'http://127.0.0.1:8178',
+      modelId: 'moonshine-streaming-small-en',
+      modelArchitecture: 'small-streaming',
+      modelPath,
+      runtimePath,
+      modelComponents: [modelComponent],
+      runtimeComponents: [runtimeComponent],
+      lockfilePath,
+      serverPath,
+      updateIntervalMs: 500,
+    },
+    samples: v1.manifest.samples,
+    corpusSha256: v1.manifest.corpusSha256,
+  };
+  const manifestPath = v1.manifestPath;
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  return { manifest, manifestPath, projectRoot: v1.projectRoot };
 }

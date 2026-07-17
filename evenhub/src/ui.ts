@@ -15,7 +15,7 @@ const labels: Record<AppState['kind'], string> = {
   pairing: 'Pairing required',
   ready: 'Ready',
   recording: 'Recording',
-  stopping: 'Stopping recording',
+  stopping: 'Captured · finalizing',
   uploading: 'Sending',
   transcribing: 'Transcribing',
   thinking: 'NanoClaw is thinking',
@@ -212,9 +212,9 @@ function renderCurrentState(state: AppState): string {
     case 'ready':
       return `${heading}<p class="instruction">Tap either temple to record. Tap once more to send the turn.</p>`;
     case 'recording':
-      return `${heading}<p class="instruction">Speak naturally, then tap to send.</p><div class="panel metric">${(state.bytes / 32_000).toFixed(1)} seconds captured</div>`;
+      return `${heading}<p class="instruction">Speak naturally, then tap to send.</p><div class="panel metric">${(state.bytes / 32_000).toFixed(1)} seconds captured</div>${snapshotText(state) ? `<p class="transcript" aria-live="polite">${escapeHtml(snapshotText(state))}</p>` : ''}`;
     case 'stopping':
-      return `${heading}<p class="instruction">Audio captured. The timer has stopped while the G2 microphone closes.</p>`;
+      return `${heading}<p class="instruction">The timer is frozen while local speech recognition finishes.</p>${snapshotText(state) ? `<p class="transcript">${escapeHtml(snapshotText(state))}</p>` : ''}`;
     case 'uploading':
       return `${heading}<p class="instruction">Securing the recorded audio on your local host.</p>`;
     case 'transcribing':
@@ -226,6 +226,12 @@ function renderCurrentState(state: AppState): string {
     case 'error':
       return `${heading}<p class="error">${escapeHtml(state.message)}</p><div class="panel">${state.retryable ? '<button data-action="retry">Try again</button>' : '<button class="secondary" data-action="new">Return to ready</button>'}</div>`;
   }
+}
+
+function snapshotText(
+  state: Extract<AppState, { kind: 'recording' | 'stopping' }>,
+): string {
+  return [state.finalText, state.interimText].filter(Boolean).join(' ').trim();
 }
 
 function renderSessionHistory(state: AppState): string {

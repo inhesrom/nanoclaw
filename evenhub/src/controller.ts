@@ -1,4 +1,4 @@
-import { EvenHubApiError, type EvenHubApiPort } from './api';
+import { EvenHubApiError, type EvenHubApiPort, type LiveTurn } from './api';
 import {
   initialState,
   reduceAppState,
@@ -32,6 +32,8 @@ export class TurnController {
   private stateValue: AppState = initialState;
   private token: string | null = null;
   private pendingUpload?: PendingUpload;
+  private liveTurn?: LiveTurn;
+  private recordingIdempotencyKey?: string;
   private generation = 0;
 
   constructor(private readonly options: TurnControllerOptions) {
@@ -71,6 +73,24 @@ export class TurnController {
 
   startRecording(startedAt = Date.now()): void {
     this.dispatch({ type: 'RECORD_STARTED', startedAt });
+    if (!this.token || this.stateValue.kind !== 'recording') return;
+    this.recordingIdempotencyKey =
+      this.options.createIdempotencyKey?.() ?? crypto.randomUUID();
+    this.liveTurn = this.options.api.startLiveTurn?.(
+      this.token,
+      this.recordingIdempotencyKey,
+      ({ finalText, interimText }) => {
+        const state = this.stateValue;
+        if (
+          (state.kind === 'recording' || state.kind === 'stopping') &&
+          state.finalText === finalText &&
+          state.interimText === interimText
+        ) {
+          return;
+        }
+        this.dispatch({ type: 'TRANSCRIPT_SNAPSHOT', finalText, interimText });
+      },
+    );
   }
 
   recordingProgress(bytes: number): void {
@@ -81,7 +101,14 @@ export class TurnController {
     this.dispatch({ type: 'RECORD_STOP_REQUESTED' });
   }
 
+  streamPcm(pcm: Uint8Array): void {
+    this.liveTurn?.push(pcm);
+  }
+
   recordingFailed(message: string): void {
+    this.liveTurn?.abort();
+    this.liveTurn = undefined;
+    this.recordingIdempotencyKey = undefined;
     this.dispatch({ type: 'FAILED', message, retryable: false });
   }
 
@@ -94,8 +121,37 @@ export class TurnController {
       return;
     }
     const idempotencyKey =
-      this.options.createIdempotencyKey?.() ?? crypto.randomUUID();
+      this.recordingIdempotencyKey ??
+      this.options.createIdempotencyKey?.() ??
+      crypto.randomUUID();
+    this.recordingIdempotencyKey = undefined;
     this.pendingUpload = { pcm, durationMs, idempotencyKey };
+    await this.options.storage.set(
+      STORAGE_KEYS.activeIdempotencyKey,
+      idempotencyKey,
+    );
+    const liveTurn = this.liveTurn;
+    this.liveTurn = undefined;
+    if (liveTurn) {
+      try {
+        const result = await liveTurn.finish(pcm, durationMs);
+        const activeTurn = {
+          id: result.turnId,
+          idempotencyKey,
+        };
+        await this.options.storage.set(
+          STORAGE_KEYS.activeTurnId,
+          result.turnId,
+        );
+        this.pendingUpload = undefined;
+        this.dispatch({ type: 'STREAM_FINAL', turn: activeTurn, result });
+        if (await this.consumeTurn(activeTurn, result)) return;
+        await this.poll(activeTurn);
+        return;
+      } catch {
+        // The complete retained PCM is submitted below with the same key.
+      }
+    }
     await this.uploadPending();
   }
 
@@ -129,6 +185,9 @@ export class TurnController {
 
   async newTurn(): Promise<void> {
     this.generation += 1;
+    this.liveTurn?.abort();
+    this.liveTurn = undefined;
+    this.recordingIdempotencyKey = undefined;
     this.pendingUpload = undefined;
     this.dispatch({ type: 'READY' });
     await this.clearActiveTurn();
@@ -136,6 +195,9 @@ export class TurnController {
 
   dispose(): void {
     this.generation += 1;
+    this.liveTurn?.abort();
+    this.liveTurn = undefined;
+    this.recordingIdempotencyKey = undefined;
     this.pendingUpload = undefined;
   }
 
