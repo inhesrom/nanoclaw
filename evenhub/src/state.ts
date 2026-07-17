@@ -24,11 +24,23 @@ export interface ActiveTurn {
   idempotencyKey: string;
 }
 
-export type AppState =
+export interface CompletedTurn {
+  turnId: string;
+  transcript?: string;
+  pages: string[];
+}
+
+export interface SessionState {
+  turns: CompletedTurn[];
+  turn: number;
+}
+
+type AppViewState =
   | { kind: 'booting' }
   | { kind: 'pairing'; error?: string }
   | { kind: 'ready' }
   | { kind: 'recording'; startedAt: number; bytes: number }
+  | { kind: 'stopping' }
   | { kind: 'uploading'; idempotencyKey: string }
   | {
       kind: 'transcribing';
@@ -56,12 +68,15 @@ export type AppState =
       activeTurn?: ActiveTurn;
     };
 
+export type AppState = AppViewState & { session: SessionState };
+
 export type AppAction =
   | { type: 'RESTORED'; hasToken: boolean; activeTurn?: ActiveTurn }
   | { type: 'PAIR_FAILED'; message: string }
   | { type: 'PAIRED' }
   | { type: 'RECORD_STARTED'; startedAt: number }
   | { type: 'RECORD_PROGRESS'; bytes: number }
+  | { type: 'RECORD_STOP_REQUESTED' }
   | { type: 'UPLOAD_STARTED'; idempotencyKey: string }
   | { type: 'TURN_ACCEPTED'; turn: ActiveTurn }
   | { type: 'TURN_UPDATED'; turn: ActiveTurn; result: ServerTurn }
@@ -83,37 +98,48 @@ export type AppAction =
   | { type: 'READY' }
   | { type: 'PAIRING_REQUIRED'; message?: string };
 
-export const initialState: AppState = { kind: 'booting' };
+export const initialState: AppState = {
+  kind: 'booting',
+  session: { turns: [], turn: 0 },
+};
 
 export function reduceAppState(state: AppState, action: AppAction): AppState {
+  const session = state.session;
   switch (action.type) {
     case 'RESTORED':
-      if (!action.hasToken) return { kind: 'pairing' };
+      if (!action.hasToken) return { kind: 'pairing', session };
       return action.activeTurn
-        ? { kind: 'transcribing', turn: action.activeTurn }
-        : { kind: 'ready' };
+        ? { kind: 'transcribing', turn: action.activeTurn, session }
+        : { kind: 'ready', session };
     case 'PAIR_FAILED':
-      return { kind: 'pairing', error: action.message };
+      return { kind: 'pairing', error: action.message, session };
     case 'PAIRED':
     case 'READY':
-      return { kind: 'ready' };
+      return { kind: 'ready', session };
     case 'PAIRING_REQUIRED':
-      return { kind: 'pairing', error: action.message };
+      return { kind: 'pairing', error: action.message, session };
     case 'RECORD_STARTED':
       return state.kind === 'ready'
-        ? { kind: 'recording', startedAt: action.startedAt, bytes: 0 }
+        ? {
+            kind: 'recording',
+            startedAt: action.startedAt,
+            bytes: 0,
+            session,
+          }
         : state;
     case 'RECORD_PROGRESS':
       return state.kind === 'recording'
         ? { ...state, bytes: action.bytes }
         : state;
+    case 'RECORD_STOP_REQUESTED':
+      return state.kind === 'recording' ? { kind: 'stopping', session } : state;
     case 'UPLOAD_STARTED':
-      return state.kind === 'recording' || state.kind === 'error'
-        ? { kind: 'uploading', idempotencyKey: action.idempotencyKey }
+      return state.kind === 'stopping' || state.kind === 'error'
+        ? { kind: 'uploading', idempotencyKey: action.idempotencyKey, session }
         : state;
     case 'TURN_ACCEPTED':
       return state.kind === 'uploading'
-        ? { kind: 'transcribing', turn: action.turn }
+        ? { kind: 'transcribing', turn: action.turn, session }
         : state;
     case 'TURN_UPDATED':
       if (
@@ -135,6 +161,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
             state.kind === 'transcribing' || state.kind === 'thinking'
               ? state.notice
               : undefined,
+          session,
         };
       }
       if (
@@ -150,6 +177,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
             state.kind === 'transcribing' || state.kind === 'thinking'
               ? state.notice
               : undefined,
+          session,
         };
       }
       return state;
@@ -157,28 +185,65 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
       return state.kind === 'transcribing' || state.kind === 'thinking'
         ? { ...state, notice: action.message }
         : state;
-    case 'TURN_COMPLETED':
-      return {
-        kind: 'answer',
-        turnId: action.turnId,
-        transcript: action.transcript,
-        pages: action.pages.length > 0 ? action.pages : ['(empty response)'],
-        page: 0,
-      };
+    case 'TURN_COMPLETED': {
+      const pages =
+        action.pages.length > 0 ? action.pages : ['(empty response)'];
+      const turns = session.turns
+        .filter((turn) => turn.turnId !== action.turnId)
+        .concat({
+          turnId: action.turnId,
+          transcript: action.transcript,
+          pages,
+        });
+      return answerAt({ turns, turn: turns.length - 1 }, turns.length - 1, 0);
+    }
     case 'FAILED':
       return {
         kind: 'error',
         message: action.message,
         retryable: action.retryable,
         activeTurn: action.activeTurn,
+        session,
       };
     case 'PAGE_NEXT':
-      return state.kind === 'answer'
-        ? { ...state, page: Math.min(state.page + 1, state.pages.length - 1) }
-        : state;
+      return state.kind === 'answer' ? moveAnswer(state, 1) : state;
     case 'PAGE_PREVIOUS':
-      return state.kind === 'answer'
-        ? { ...state, page: Math.max(state.page - 1, 0) }
-        : state;
+      return state.kind === 'answer' ? moveAnswer(state, -1) : state;
   }
+}
+
+function moveAnswer(
+  state: Extract<AppState, { kind: 'answer' }>,
+  direction: -1 | 1,
+): AppState {
+  if (direction === 1) {
+    if (state.page < state.pages.length - 1) {
+      return { ...state, page: state.page + 1 };
+    }
+    if (state.session.turn < state.session.turns.length - 1) {
+      const turn = state.session.turn + 1;
+      return answerAt(state.session, turn, 0);
+    }
+    return state;
+  }
+
+  if (state.page > 0) return { ...state, page: state.page - 1 };
+  if (state.session.turn > 0) {
+    const turn = state.session.turn - 1;
+    const previous = state.session.turns[turn];
+    return answerAt(state.session, turn, previous.pages.length - 1);
+  }
+  return state;
+}
+
+function answerAt(session: SessionState, turn: number, page: number): AppState {
+  const selected = session.turns[turn];
+  return {
+    kind: 'answer',
+    turnId: selected.turnId,
+    transcript: selected.transcript,
+    pages: selected.pages,
+    page,
+    session: { ...session, turn },
+  };
 }

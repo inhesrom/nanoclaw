@@ -15,6 +15,7 @@ const labels: Record<AppState['kind'], string> = {
   pairing: 'Pairing required',
   ready: 'Ready',
   recording: 'Recording',
+  stopping: 'Stopping recording',
   uploading: 'Sending',
   transcribing: 'Transcribing',
   thinking: 'NanoClaw is thinking',
@@ -64,6 +65,7 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
       }
       .ray[data-step="pairing"]::before { top: 66px; background: #ffc17a; }
       .ray[data-step="ready"]::before, .ray[data-step="recording"]::before { top: 126px; }
+      .ray[data-step="stopping"]::before { top: 156px; }
       .ray[data-step="uploading"]::before, .ray[data-step="transcribing"]::before { top: 186px; }
       .ray[data-step="thinking"]::before { top: 246px; }
       .ray[data-step="answer"]::before { top: 306px; background: #c9ffb1; }
@@ -99,6 +101,25 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
         margin: 16px 0;
       }
       .transcript { color: #84958e; font-size: 13px; margin-top: 18px; }
+      .history {
+        border-top: 1px solid #35453f;
+        margin-top: 42px;
+        padding-top: 22px;
+        max-height: 52vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+      .history h2 {
+        margin: 0 0 18px;
+        color: #8bd5c8;
+        font: 700 11px/1.2 "Courier New", monospace;
+        letter-spacing: .14em;
+        text-transform: uppercase;
+      }
+      .turn { border-bottom: 1px solid #25332e; padding: 0 0 20px; margin: 0 0 20px; }
+      .turn:last-child { border-bottom: 0; margin-bottom: 0; }
+      .turn-number { color: #c9ffb1; font: 700 12px/1.4 "Courier New", monospace; }
+      .turn-answer { white-space: pre-wrap; color: #dce9e4; line-height: 1.55; margin: 10px 0 0; }
       form { display: grid; gap: 12px; max-width: 360px; }
       label { color: #9cada6; font-size: 13px; }
       input {
@@ -163,12 +184,16 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
   return {
     render(state) {
       ray.dataset.step = state.kind;
-      stateRoot.innerHTML = renderState(state);
+      stateRoot.innerHTML = renderCompanionState(state);
     },
   };
 }
 
-function renderState(state: AppState): string {
+export function renderCompanionState(state: AppState): string {
+  return renderCurrentState(state) + renderSessionHistory(state);
+}
+
+function renderCurrentState(state: AppState): string {
   const heading = `<h1>${labels[state.kind]}</h1>`;
   switch (state.kind) {
     case 'booting':
@@ -188,6 +213,8 @@ function renderState(state: AppState): string {
       return `${heading}<p class="instruction">Tap either temple to record. Tap once more to send the turn.</p>`;
     case 'recording':
       return `${heading}<p class="instruction">Speak naturally, then tap to send.</p><div class="panel metric">${(state.bytes / 32_000).toFixed(1)} seconds captured</div>`;
+    case 'stopping':
+      return `${heading}<p class="instruction">Audio captured. The timer has stopped while the G2 microphone closes.</p>`;
     case 'uploading':
       return `${heading}<p class="instruction">Securing the recorded audio on your local host.</p>`;
     case 'transcribing':
@@ -199,6 +226,22 @@ function renderState(state: AppState): string {
     case 'error':
       return `${heading}<p class="error">${escapeHtml(state.message)}</p><div class="panel">${state.retryable ? '<button data-action="retry">Try again</button>' : '<button class="secondary" data-action="new">Return to ready</button>'}</div>`;
   }
+}
+
+function renderSessionHistory(state: AppState): string {
+  if (state.session.turns.length === 0) return '';
+  return `<section class="history" aria-label="Session turns">
+    <h2>Session turns</h2>
+    ${state.session.turns
+      .map(
+        (turn, index) => `<article class="turn">
+          <div class="turn-number">Turn ${index + 1}</div>
+          ${turn.transcript ? `<p class="transcript">Heard: ${escapeHtml(turn.transcript)}</p>` : ''}
+          <p class="turn-answer">${escapeHtml(turn.pages.join('\n\n'))}</p>
+        </article>`,
+      )
+      .join('')}
+  </section>`;
 }
 
 function escapeHtml(value: string): string {

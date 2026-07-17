@@ -1,15 +1,17 @@
 import {
   AudioInputSource,
   CreateStartUpPageContainer,
-  OsEventTypeList,
   TextContainerProperty,
-  TextContainerUpgrade,
   waitForEvenAppBridge,
 } from '@evenrealities/even_hub_sdk';
 
 import { EvenHubApi } from './api';
 import { TurnController } from './controller';
+import { routeHubInteraction } from './event-routing';
+import { CoalescingGlassesRenderer } from './glasses-renderer';
 import { paginate } from './paginate';
+import { handlePrimaryTap } from './primary-tap';
+import { G2Recorder } from './recorder';
 import type { AppState } from './state';
 import { BridgeStorage } from './storage';
 import { mountCompanionUi } from './ui';
@@ -19,7 +21,6 @@ const origin = import.meta.env.VITE_EVENHUB_ORIGIN || APPROVED_ORIGIN;
 if (origin !== APPROVED_ORIGIN) {
   throw new Error(`VITE_EVENHUB_ORIGIN must be ${APPROVED_ORIGIN}`);
 }
-const MAX_AUDIO_BYTES = 960_000;
 const BODY_WIDTH = 576;
 const BODY_HEIGHT = 240;
 const BODY_PADDING = 4;
@@ -66,169 +67,80 @@ await bridge.createStartUpPageContainer(
   }),
 );
 
-let controller!: TurnController;
+const controllerRef: { current?: TurnController } = {};
 const companion = mountCompanionUi({
-  onPair: (code) => controller.pair(code),
-  onRetry: () => controller.retry(),
-  onNewTurn: () => controller.newTurn(),
+  onPair: (code) => controllerRef.current!.pair(code),
+  onRetry: () => controllerRef.current!.retry(),
+  onNewTurn: () => controllerRef.current!.newTurn(),
 });
-let rendering: Promise<unknown> = Promise.resolve();
+const glasses = new CoalescingGlassesRenderer({
+  bridge,
+  onError: (error) => console.error('Glasses render failed:', error),
+});
 
 function render(state: AppState): void {
   companion.render(state);
-  const view = glassesView(state);
-  rendering = rendering
-    .then(async () => {
-      await bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: 1,
-          containerName: 'body',
-          content: view.body,
-        }),
-      );
-      await bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: 2,
-          containerName: 'pager',
-          content: view.pager,
-        }),
-      );
-    })
-    .catch((error) => console.error('Glasses render failed:', error));
+  glasses.render(glassesView(state));
 }
 
-controller = new TurnController({
+const controller = new TurnController({
   api: new EvenHubApi(origin),
   storage: new BridgeStorage(bridge),
   paginateAnswer: (answer) =>
     paginate(answer, { width: INNER_WIDTH, height: INNER_HEIGHT }),
   onState: render,
 });
-
-let audioChunks: Uint8Array[] = [];
-let audioBytes = 0;
-let stopTimer: number | undefined;
-let stopping = false;
-
-async function startRecording(): Promise<void> {
-  if (controller.state.kind !== 'ready') return;
-  audioChunks = [];
-  audioBytes = 0;
-  controller.startRecording();
-  try {
-    const opened = await bridge.audioControl(true, AudioInputSource.Glasses);
-    if (opened) {
-      stopTimer = window.setTimeout(() => void finishRecording(), 30_000);
-      return;
-    }
-    controller.recordingFailed('The G2 microphone could not be opened.');
-  } catch (error) {
-    controller.recordingFailed(
-      error instanceof Error ? error.message : 'The G2 microphone failed.',
-    );
-  }
-}
-
-async function finishRecording(): Promise<void> {
-  if (controller.state.kind !== 'recording' || stopping) return;
-  stopping = true;
-  if (stopTimer !== undefined) window.clearTimeout(stopTimer);
-  stopTimer = undefined;
-  try {
-    await bridge.audioControl(false);
-  } catch (error) {
-    console.error('Could not close the G2 microphone:', error);
-  }
-  const durationMs = Math.round(audioBytes / 32);
-  if (durationMs < 250) {
-    controller.recordingFailed('Keep recording for at least a quarter second.');
-    audioChunks = [];
-    stopping = false;
-    return;
-  }
-  const pcm = new Uint8Array(audioBytes);
-  let offset = 0;
-  for (const chunk of audioChunks) {
-    pcm.set(chunk, offset);
-    offset += chunk.length;
-  }
-  audioChunks = [];
-  stopping = false;
-  await controller.submit(pcm, durationMs);
-}
+controllerRef.current = controller;
+const recorder = new G2Recorder({
+  bridge,
+  controller,
+  audioSource: AudioInputSource.Glasses,
+  onCloseError: (error) =>
+    console.error('Could not close the G2 microphone:', error),
+});
 
 let unsubscribe: () => void = () => undefined;
 let cleanedUp = false;
 async function cleanup(): Promise<void> {
   if (cleanedUp) return;
   cleanedUp = true;
-  if (stopTimer !== undefined) window.clearTimeout(stopTimer);
-  try {
-    await bridge.audioControl(false);
-  } catch (error) {
-    console.error('Could not close the G2 microphone:', error);
-  } finally {
-    unsubscribe();
-    controller.dispose();
-    audioChunks = [];
-  }
+  await recorder.cancel();
+  unsubscribe();
+  controller.dispose();
 }
 
 unsubscribe = bridge.onEvenHubEvent((event: HubEvent) => {
   const pcm = event.audioEvent?.audioPcm;
-  if (pcm && controller.state.kind === 'recording') {
-    const remaining = MAX_AUDIO_BYTES - audioBytes;
-    if (remaining > 0) {
-      const chunk = new Uint8Array(pcm.slice(0, remaining));
-      audioChunks.push(chunk);
-      audioBytes += chunk.length;
-      controller.recordingProgress(audioBytes);
-    }
-    if (audioBytes >= MAX_AUDIO_BYTES) void finishRecording();
-  }
+  if (pcm) recorder.pushPcm(pcm);
 
-  const sysType = event.sysEvent
-    ? (event.sysEvent.eventType ?? OsEventTypeList.CLICK_EVENT)
-    : null;
-  const textType = event.textEvent
-    ? (event.textEvent.eventType ?? OsEventTypeList.CLICK_EVENT)
-    : null;
-  if (
-    sysType === OsEventTypeList.DOUBLE_CLICK_EVENT ||
-    textType === OsEventTypeList.DOUBLE_CLICK_EVENT
-  ) {
+  const interaction = routeHubInteraction(event);
+  if (interaction === 'exit') {
     void bridge.shutDownPageContainer(1);
     return;
   }
-  if (textType === OsEventTypeList.SCROLL_TOP_EVENT) {
+  if (interaction === 'previous') {
     controller.previousPage();
     return;
   }
-  if (textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
+  if (interaction === 'next') {
     controller.nextPage();
     return;
   }
-  if (sysType === OsEventTypeList.CLICK_EVENT) {
-    if (controller.state.kind === 'ready') void startRecording();
-    else if (controller.state.kind === 'recording') void finishRecording();
-    else if (controller.state.kind === 'answer') controller.nextPage();
+  if (interaction === 'primary') {
+    void handlePrimaryTap({ controller, recorder });
     return;
   }
-  if (sysType === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
-    if (controller.state.kind === 'recording') {
-      if (stopTimer !== undefined) window.clearTimeout(stopTimer);
-      stopTimer = undefined;
-      void bridge.audioControl(false);
-      audioChunks = [];
-      audioBytes = 0;
+  if (interaction === 'foreground-exit') {
+    if (
+      controller.state.kind === 'recording' ||
+      controller.state.kind === 'stopping'
+    ) {
+      void recorder.cancel();
       void controller.newTurn();
     }
     return;
   }
-  if (
-    sysType === OsEventTypeList.SYSTEM_EXIT_EVENT ||
-    sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT
-  ) {
+  if (interaction === 'shutdown') {
     void cleanup();
   }
 });
@@ -259,8 +171,16 @@ function glassesView(state: AppState): { body: string; pager: string } {
         body: `Recording…\n\n${(state.bytes / 32_000).toFixed(1)} seconds`,
         pager: 'Tap: send',
       };
+    case 'stopping':
+      return {
+        body: 'Audio captured\n\nStopping microphone…',
+        pager: 'Timer stopped',
+      };
     case 'uploading':
-      return { body: 'Securing audio…', pager: 'Local network' };
+      return {
+        body: 'Audio captured\n\nSending securely…',
+        pager: 'Local network',
+      };
     case 'transcribing':
       return {
         body: state.notice || state.transcript || 'Transcribing locally…',
@@ -271,11 +191,15 @@ function glassesView(state: AppState): { body: string; pager: string } {
         body: state.notice || state.transcript || 'NanoClaw is thinking…',
         pager: 'Shared WhatsApp context',
       };
-    case 'answer':
+    case 'answer': {
+      const hasNext =
+        state.page < state.pages.length - 1 ||
+        state.session.turn < state.session.turns.length - 1;
       return {
         body: state.pages[state.page],
-        pager: `${state.page + 1} / ${state.pages.length} · tap: next · swipe up: prev`,
+        pager: `Turn ${state.session.turn + 1}/${state.session.turns.length} · Page ${state.page + 1}/${state.pages.length} · ${hasNext ? 'tap: next' : 'tap: record'} · swipe up: prev`,
       };
+    }
     case 'error':
       return {
         body: `Could not complete the turn\n\n${state.message}`,

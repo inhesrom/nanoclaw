@@ -49,7 +49,7 @@ describe('EvenHub deployment assets', () => {
     expect(avahi).not.toContain('_http._tcp');
   });
 
-  it('limits ingress to the rendered LAN interface/subnet and denies forwarding', () => {
+  it('limits ingress and denies new LAN forwarding without breaking container replies', () => {
     const firewall = read('firewall', 'nanoclaw-evenhub.nft.template');
     expect(firewall).toContain(
       'define lan_interface = "REPLACE_LAN_INTERFACE"',
@@ -59,11 +59,19 @@ describe('EvenHub deployment assets', () => {
     expect(firewall).toContain(
       'iifname $lan_interface ip saddr $lan_subnet tcp dport 443 accept',
     );
-    expect(firewall.match(/tcp dport 443 drop/g)).toHaveLength(2);
+    expect(firewall.match(/tcp dport 443 drop/g)).toHaveLength(1);
     expect(firewall.indexOf('tcp dport 443 accept')).toBeLessThan(
       firewall.indexOf('tcp dport 443 drop'),
     );
-    expect(firewall).toMatch(/chain forward[\s\S]*tcp dport 443 drop/);
+    expect(firewall).toMatch(
+      /chain forward[\s\S]*ct state established,related accept/,
+    );
+    expect(firewall).toMatch(
+      /chain forward[\s\S]*iifname \$lan_interface drop/,
+    );
+    expect(
+      firewall.indexOf('ct state established,related accept'),
+    ).toBeLessThan(firewall.indexOf('iifname $lan_interface drop'));
   });
 
   it('runs the pinned Whisper command as a hardened loopback service', () => {
@@ -121,6 +129,7 @@ describe('EvenHub deployment assets', () => {
       fs.readFileSync(path.join(root, 'evenhub', 'package.json'), 'utf8'),
     ) as {
       private: boolean;
+      version: string;
       dependencies: Record<string, string>;
       devDependencies: Record<string, string>;
     };
@@ -128,9 +137,11 @@ describe('EvenHub deployment assets', () => {
       fs.readFileSync(path.join(root, 'evenhub', 'app.json'), 'utf8'),
     ) as {
       package_id: string;
+      version: string;
       permissions: Array<{ name: string; whitelist?: string[] }>;
     };
     expect(packageJson.private).toBe(true);
+    expect(packageJson.version).toBe('0.1.3');
     expect(packageJson.dependencies).toEqual({
       '@evenrealities/even_hub_sdk': '0.0.12',
       '@evenrealities/pretext': '0.1.4',
@@ -143,6 +154,7 @@ describe('EvenHub deployment assets', () => {
       vitest: '4.1.10',
     });
     expect(manifest.package_id).toBe('dev.inhesrom.nanoclaw.evenhub');
+    expect(manifest.version).toBe(packageJson.version);
     expect(manifest.permissions.map(({ name }) => name)).toEqual([
       'g2-microphone',
       'network',

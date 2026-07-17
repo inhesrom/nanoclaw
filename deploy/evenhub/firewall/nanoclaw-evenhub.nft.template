@@ -17,6 +17,7 @@ table inet nanoclaw_evenhub {
   chain forward {
     type filter hook forward priority -10; policy accept;
 
-    tcp dport 443 drop
+    ct state established,related accept
+    iifname $lan_interface drop
   }
 }

@@ -1,7 +1,7 @@
 # Dependencies
 node_modules/
 .npm-cache/
-# Build output
+# Build output and private packages
 dist/
 *.ehpk
 

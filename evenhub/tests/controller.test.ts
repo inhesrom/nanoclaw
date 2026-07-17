@@ -148,7 +148,10 @@ describe('TurnController', () => {
 
     await controller.retry();
 
-    expect(controller.state).toEqual({ kind: 'ready' });
+    expect(controller.state).toEqual({
+      kind: 'ready',
+      session: { turns: [], turn: 0 },
+    });
   });
 
   it('uses server polling cadence, shows a 30-second notice, and retains a five-minute turn', async () => {

@@ -42,7 +42,7 @@ sample objects are required):
   "createdAt": "2026-07-16T22:00:00.000Z",
   "environment": {
     "g2Firmware": "...",
-    "evenHubApp": "0.1.0",
+    "evenHubApp": "0.1.3",
     "phone": "model / OS / companion version",
     "pi": "model / OS / kernel / architecture / cooling",
     "whisperCpp": "v1.9.1 release arm64"

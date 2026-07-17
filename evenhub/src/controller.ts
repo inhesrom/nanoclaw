@@ -77,6 +77,10 @@ export class TurnController {
     this.dispatch({ type: 'RECORD_PROGRESS', bytes });
   }
 
+  recordingStopped(): void {
+    this.dispatch({ type: 'RECORD_STOP_REQUESTED' });
+  }
+
   recordingFailed(message: string): void {
     this.dispatch({ type: 'FAILED', message, retryable: false });
   }
@@ -126,8 +130,8 @@ export class TurnController {
   async newTurn(): Promise<void> {
     this.generation += 1;
     this.pendingUpload = undefined;
-    await this.clearActiveTurn();
     this.dispatch({ type: 'READY' });
+    await this.clearActiveTurn();
   }
 
   dispose(): void {

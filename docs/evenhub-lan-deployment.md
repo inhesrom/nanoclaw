@@ -38,7 +38,7 @@ npm ci
 npm test
 npm run pack:verify
 npm run pack:private
-sha256sum nanoclaw-evenhub-0.1.0.ehpk
+sha256sum nanoclaw-evenhub-0.1.3.ehpk
 ```
 
 `pack:verify` builds two private packages in an isolated temporary directory and
@@ -105,7 +105,11 @@ sudo nft -c -f /etc/nftables.d/nanoclaw-evenhub.nft
 ```
 
 The dedicated table accepts TCP 443 only on that interface from that IPv4
-subnet, drops every other IPv4/IPv6 TCP 443 input, and drops forwarded TCP 443.
+subnet and drops every other IPv4/IPv6 TCP 443 input. Its forwarding chain
+allows established replies (including the existing container runtime's return
+traffic) and drops every new connection arriving from the LAN interface. This
+prevents the Pi from routing LAN clients without breaking NanoClaw's outbound
+agent containers.
 It leaves unrelated firewall policy alone. Keep an existing administrative
 session open while first applying firewall changes.
 

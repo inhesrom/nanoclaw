@@ -12,7 +12,14 @@ describe('EvenHub app reducer', () => {
       type: 'RECORD_STARTED',
       startedAt: 10,
     });
-    const uploading = reduceAppState(recording, {
+    const stopping = reduceAppState(recording, {
+      type: 'RECORD_STOP_REQUESTED',
+    });
+    expect(stopping).toEqual({
+      kind: 'stopping',
+      session: { turns: [], turn: 0 },
+    });
+    const uploading = reduceAppState(stopping, {
       type: 'UPLOAD_STARTED',
       idempotencyKey: 'key',
     });
@@ -56,6 +63,7 @@ describe('EvenHub app reducer', () => {
     ).toEqual({
       kind: 'transcribing',
       turn: { id: 'turn-1', idempotencyKey: 'key' },
+      session: { turns: [], turn: 0 },
     });
   });
 
@@ -67,5 +75,45 @@ describe('EvenHub app reducer', () => {
     expect(
       reduceAppState(pairing, { type: 'RECORD_STARTED', startedAt: 10 }),
     ).toBe(pairing);
+  });
+
+  it('keeps completed turns in session and pages across turn boundaries', () => {
+    const first = reduceAppState(initialState, {
+      type: 'TURN_COMPLETED',
+      turnId: 'turn-1',
+      transcript: 'first prompt',
+      pages: ['first a', 'first b'],
+    });
+    const ready = reduceAppState(first, { type: 'READY' });
+    const second = reduceAppState(ready, {
+      type: 'TURN_COMPLETED',
+      turnId: 'turn-2',
+      transcript: 'second prompt',
+      pages: ['second'],
+    });
+
+    expect(second.session.turns).toHaveLength(2);
+    expect(second).toMatchObject({
+      kind: 'answer',
+      turnId: 'turn-2',
+      page: 0,
+      session: { turn: 1 },
+    });
+
+    const previousTurn = reduceAppState(second, { type: 'PAGE_PREVIOUS' });
+    expect(previousTurn).toMatchObject({
+      kind: 'answer',
+      turnId: 'turn-1',
+      page: 1,
+      session: { turn: 0 },
+    });
+
+    const nextTurn = reduceAppState(previousTurn, { type: 'PAGE_NEXT' });
+    expect(nextTurn).toMatchObject({
+      kind: 'answer',
+      turnId: 'turn-2',
+      page: 0,
+      session: { turn: 1 },
+    });
   });
 });
