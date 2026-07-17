@@ -22,6 +22,10 @@ import type { EvenDevice, EvenTurn } from './types.js';
 import { toPublicEvenTurn } from './types.js';
 import { createUuidV7, isUuidV4 } from './uuid.js';
 import { sha256 } from './pairing.js';
+import type {
+  EvenHubDependencySnapshot,
+  EvenHubReadinessProbe,
+} from './readiness.js';
 
 const AUDIO_CONTENT_TYPE = 'audio/L16;rate=16000;channels=1';
 const MAX_JSON_BYTES = 16 * 1024;
@@ -39,6 +43,8 @@ export interface EvenHubServerOptions {
   maxAudioBytes?: number;
   pairingTtlMs?: number;
   processor?: EvenTurnProcessor;
+  readiness?: EvenHubReadinessProbe;
+  version?: string;
 }
 
 export interface InjectedEvenHubRequest {
@@ -247,6 +253,16 @@ export class EvenHubServer {
     this.maxAudioBytes = options.maxAudioBytes ?? 960_000;
   }
 
+  private async dependencies(): Promise<EvenHubDependencySnapshot> {
+    return (
+      (await this.options.readiness?.snapshot()) ?? {
+        database: 'up',
+        whisper: 'up',
+        whatsapp: 'up',
+      }
+    );
+  }
+
   async start(): Promise<void> {
     if (this.server) return;
     this.server = http.createServer((request, response) => {
@@ -343,9 +359,28 @@ export class EvenHubServer {
 
       const pathname = new URL(request.url || '/', 'http://localhost').pathname;
       if (request.method === 'GET' && pathname === '/api/even/v1/healthz') {
+        const dependencies = await this.dependencies();
         sendJson(response, 200, {
-          status: 'ok',
-          processor: this.options.processor ? 'ready' : 'not_configured',
+          status: Object.values(dependencies).every((state) => state === 'up')
+            ? 'ok'
+            : 'degraded',
+          version: this.options.version ?? 'unknown',
+          whisper: dependencies.whisper,
+          whatsapp: dependencies.whatsapp,
+        });
+        return;
+      }
+      if (request.method === 'GET' && pathname === '/api/even/v1/readyz') {
+        const dependencies = await this.dependencies();
+        const unavailable = Object.entries(dependencies)
+          .filter(([, state]) => state === 'down')
+          .map(([component]) => component);
+        sendJson(response, unavailable.length === 0 ? 200 : 503, {
+          status: unavailable.length === 0 ? 'ready' : 'not_ready',
+          components:
+            unavailable.length === 0
+              ? ['api', 'database', 'whisper', 'whatsapp']
+              : unavailable,
         });
         return;
       }
@@ -368,7 +403,10 @@ export class EvenHubServer {
         sendError(response, error);
         return;
       }
-      logger.error({ err: error }, 'EvenHub request failed');
+      logger.error(
+        { error_type: error instanceof Error ? error.name : 'UnknownError' },
+        'even.request_failed',
+      );
       sendError(
         response,
         new ApiError(
@@ -391,6 +429,13 @@ export class EvenHubServer {
       attempt?.locked_until &&
       Date.parse(attempt.locked_until) > now.getTime()
     ) {
+      logger.warn(
+        {
+          address_hash: sha256(address).slice(0, 12),
+          failure_count: attempt.failures,
+        },
+        'even.auth_lockout',
+      );
       throw new ApiError(
         429,
         'pairing_locked',
@@ -441,6 +486,13 @@ export class EvenHubServer {
         PAIR_LOCK_MS,
       );
       if (failure.locked_until) {
+        logger.warn(
+          {
+            address_hash: sha256(address).slice(0, 12),
+            failure_count: failure.failures,
+          },
+          'even.auth_lockout',
+        );
         throw new ApiError(
           429,
           'pairing_locked',
@@ -484,6 +536,19 @@ export class EvenHubServer {
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
+    const dependencies = await this.dependencies();
+    const unavailable = Object.entries(dependencies)
+      .filter(([, state]) => state === 'down')
+      .map(([component]) => component);
+    if (unavailable.length > 0) {
+      throw new ApiError(
+        503,
+        'not_ready',
+        `EvenHub is waiting for ${unavailable.join(', ')}`,
+        true,
+      );
+    }
+
     const device = authorize(request);
     const { idempotencyKey, durationMs } = validateTurnHeaders(request);
     const contentLength = Number(request.headers['content-length'] || 0);
@@ -522,6 +587,10 @@ export class EvenHubServer {
     if (existing) {
       fs.rmSync(written.tempPath, { force: true });
       if (existing.request_sha256 !== written.sha256) {
+        logger.warn(
+          { turn_id: existing.id, state: existing.state },
+          'even.idempotency_mismatch',
+        );
         throw new ApiError(
           409,
           'idempotency_payload_mismatch',
@@ -563,6 +632,10 @@ export class EvenHubServer {
       const raced = getEvenTurnByIdempotencyKey(device.id, idempotencyKey);
       if (!raced) throw error;
       if (raced.request_sha256 !== written.sha256) {
+        logger.warn(
+          { turn_id: raced.id, state: raced.state },
+          'even.idempotency_mismatch',
+        );
         throw new ApiError(
           409,
           'idempotency_payload_mismatch',
@@ -589,8 +662,12 @@ export class EvenHubServer {
       setImmediate(() => {
         void this.options.processor!.process(turn).catch((error) => {
           logger.error(
-            { err: error, turnId: id },
-            'EvenHub turn processor failed',
+            {
+              turn_id: id,
+              state: 'accepted',
+              error_type: error instanceof Error ? error.name : 'UnknownError',
+            },
+            'even.turn_processor_failed',
           );
           const failedAt = new Date().toISOString();
           transitionEvenTurnState(id, 'accepted', 'failed', {

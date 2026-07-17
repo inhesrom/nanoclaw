@@ -86,6 +86,54 @@ export const EVENHUB_TURN_RETENTION_MS = parseInt(
   10,
 );
 
+export interface EvenHubRuntimeConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  publicOrigin: string;
+  whisperUrl: string;
+  maxAudioBytes: number;
+  pairingTtlMs: number;
+  turnRetentionMs: number;
+}
+
+export const EVENHUB_RUNTIME_CONFIG: EvenHubRuntimeConfig = {
+  enabled: EVENHUB_ENABLED,
+  host: EVENHUB_HOST,
+  port: EVENHUB_PORT,
+  publicOrigin: EVENHUB_PUBLIC_ORIGIN,
+  whisperUrl: EVENHUB_WHISPER_URL,
+  maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
+  pairingTtlMs: EVENHUB_PAIRING_TTL_MS,
+  turnRetentionMs: EVENHUB_TURN_RETENTION_MS,
+};
+
+const APPROVED_EVENHUB_CONFIG: Omit<EvenHubRuntimeConfig, 'enabled'> = {
+  host: '127.0.0.1',
+  port: 18791,
+  publicOrigin: 'https://nanoclaw.local',
+  whisperUrl: 'http://127.0.0.1:8178/inference',
+  maxAudioBytes: 960_000,
+  pairingTtlMs: 300_000,
+  turnRetentionMs: 604_800_000,
+};
+
+/** Fail closed when the private LAN slice drifts from its reviewed boundary. */
+export function validateEvenHubRuntimeConfig(
+  config: EvenHubRuntimeConfig = EVENHUB_RUNTIME_CONFIG,
+): void {
+  if (!config.enabled) return;
+
+  for (const [name, approved] of Object.entries(APPROVED_EVENHUB_CONFIG)) {
+    const actual = config[name as keyof typeof APPROVED_EVENHUB_CONFIG];
+    if (actual !== approved) {
+      throw new Error(
+        `Invalid EvenHub configuration: ${name} must be ${String(approved)}`,
+      );
+    }
+  }
+}
+
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
 export const CONTAINER_TIMEOUT = parseInt(

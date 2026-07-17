@@ -1,0 +1,22 @@
+#!/usr/sbin/nft -f
+
+# Replace both documentation-only values before loading this ruleset.
+define lan_interface = "REPLACE_LAN_INTERFACE"
+define lan_subnet = 192.0.2.0/24
+
+destroy table inet nanoclaw_evenhub
+
+table inet nanoclaw_evenhub {
+  chain input {
+    type filter hook input priority -10; policy accept;
+
+    iifname $lan_interface ip saddr $lan_subnet tcp dport 443 accept
+    tcp dport 443 drop
+  }
+
+  chain forward {
+    type filter hook forward priority -10; policy accept;
+
+    tcp dport 443 drop
+  }
+}

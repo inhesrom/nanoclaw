@@ -14,6 +14,7 @@ import {
   EVENHUB_PORT,
   EVENHUB_TURN_RETENTION_MS,
   EVENHUB_WHISPER_URL,
+  validateEvenHubRuntimeConfig,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -53,6 +54,7 @@ import {
   getNewMessages,
   getRouterState,
   initDatabase,
+  isDatabaseReady,
   setRegisteredGroup,
   setRouterState,
   setSession,
@@ -92,6 +94,7 @@ import {
 } from './evenhub/whatsapp-bridge.js';
 import { deliverEvenHubReply } from './evenhub/reply-delivery.js';
 import { startEvenHubCleanup } from './evenhub/cleanup.js';
+import { EvenHubReadiness } from './evenhub/readiness.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -120,6 +123,26 @@ function getEvenHubWhatsAppTarget(): EvenHubWhatsAppTarget | undefined {
     (candidate) => candidate.name === 'whatsapp' && candidate.ownsJid(jid),
   );
   return channel ? { jid, channel } : undefined;
+}
+
+function isEvenHubWhatsAppReady(): boolean {
+  const target = getEvenHubWhatsAppTarget();
+  return Boolean(
+    target?.channel.isConnected() &&
+    target.channel.sendSelfMessage &&
+    target.channel.sendMessageConfirmed,
+  );
+}
+
+function getNanoClawVersion(): string {
+  try {
+    const metadata = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'),
+    ) as { version?: unknown };
+    return typeof metadata.version === 'string' ? metadata.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 function markCorrelatedTurnsRunning(messages: NewMessage[]): string[] {
@@ -720,6 +743,7 @@ function ensureContainerSystemRunning(): void {
 }
 
 async function main(): Promise<void> {
+  validateEvenHubRuntimeConfig();
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
@@ -731,13 +755,16 @@ async function main(): Promise<void> {
     evenHubWhatsAppBridge = new EvenHubWhatsAppBridge({
       getTarget: getEvenHubWhatsAppTarget,
     });
-    evenHubSttWorker = new EvenHubSttWorker(
-      new WhisperClient(EVENHUB_WHISPER_URL),
-      {
-        maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
-        onDispatchReady: () => evenHubWhatsAppBridge?.requestDispatch(),
-      },
-    );
+    const whisper = new WhisperClient(EVENHUB_WHISPER_URL);
+    const readiness = new EvenHubReadiness({
+      database: isDatabaseReady,
+      whisper: () => whisper.isHealthy(),
+      whatsapp: isEvenHubWhatsAppReady,
+    });
+    evenHubSttWorker = new EvenHubSttWorker(whisper, {
+      maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
+      onDispatchReady: () => evenHubWhatsAppBridge?.requestDispatch(),
+    });
     evenHubSttWorker.start();
     evenHubServer = new EvenHubServer({
       host: EVENHUB_HOST,
@@ -746,11 +773,19 @@ async function main(): Promise<void> {
       maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
       pairingTtlMs: EVENHUB_PAIRING_TTL_MS,
       processor: evenHubSttWorker,
+      readiness,
+      version: getNanoClawVersion(),
     });
     await evenHubServer.start();
+    const dependencies = await readiness.snapshot();
     logger.info(
-      { host: EVENHUB_HOST, port: EVENHUB_PORT },
-      'EvenHub LAN API listening',
+      {
+        host: EVENHUB_HOST,
+        port: EVENHUB_PORT,
+        version: getNanoClawVersion(),
+        ...dependencies,
+      },
+      'even.service_started',
     );
   }
 

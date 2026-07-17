@@ -313,6 +313,17 @@ export function _closeDatabase(): void {
   db.close();
 }
 
+export function isDatabaseReady(): boolean {
+  try {
+    const result = db.prepare('SELECT 1 AS ready').get() as
+      | { ready: number }
+      | undefined;
+    return result?.ready === 1;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Store chat metadata only (no message content).
  * Used for all chats to enable group discovery without storing sensitive content.

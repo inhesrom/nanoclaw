@@ -6,9 +6,9 @@ glasses.
 
 ## Development
 
-1. Set `VITE_EVENHUB_ORIGIN` in `.env.local` if the host is not
-   `https://nanoclaw.local`.
-2. From the repository root, enable the host with `EVENHUB_ENABLED=true`.
+1. Use the pinned `https://nanoclaw.local` origin. Other origins are rejected.
+2. From the repository root, enable the host with the reviewed EvenHub
+   environment in `deploy/evenhub/config/evenhub.env`.
 3. Run `npm run evenhub:pair` at the repository root and enter the one-time code
    in the plugin companion screen.
 4. In this directory, run `npm install`, `npm run dev`, then
@@ -18,3 +18,5 @@ The production host sends accepted recordings to a single FIFO local Whisper
 worker. See [the host setup](../docs/evenhub-local-whisper.md) for the pinned
 runtime, checksum verification, and loopback command. WhatsApp/NanoClaw
 dispatch uses the [durable turn lifecycle](../docs/evenhub-turn-lifecycle.md).
+The complete Pi service, TLS, firewall, private packaging, and rollback runbook
+is in [the LAN deployment guide](../docs/evenhub-lan-deployment.md).

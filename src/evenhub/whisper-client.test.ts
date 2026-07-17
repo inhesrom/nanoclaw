@@ -10,6 +10,29 @@ describe('WhisperClient', () => {
     ).toThrow('loopback URL');
   });
 
+  it('checks the loopback health endpoint without propagating failures', async () => {
+    const healthyFetch = vi.fn(
+      async () => new Response('OK', { status: 200 }),
+    ) as unknown as typeof fetch;
+    const unhealthyFetch = vi.fn(async () => {
+      throw new TypeError('connection refused');
+    }) as unknown as typeof fetch;
+
+    const healthy = new WhisperClient('http://127.0.0.1:8178/inference', {
+      fetch: healthyFetch,
+    });
+    const unhealthy = new WhisperClient('http://127.0.0.1:8178/inference', {
+      fetch: unhealthyFetch,
+    });
+
+    await expect(healthy.isHealthy()).resolves.toBe(true);
+    expect(healthyFetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:8178/health',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    await expect(unhealthy.isHealthy()).resolves.toBe(false);
+  });
+
   it('posts canonical WAV and stateless inference parameters to loopback', async () => {
     const wav = createCanonicalWav(new Uint8Array(8_000));
     let requestBody: FormData | undefined;

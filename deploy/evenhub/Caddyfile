@@ -1,0 +1,27 @@
+{
+	admin off
+}
+
+nanoclaw.local {
+	bind {$NANOCLAW_LAN_ADDRESS}
+	tls internal
+
+	@evenhub path /api/even/*
+	handle @evenhub {
+		reverse_proxy 127.0.0.1:18791
+	}
+
+	handle {
+		respond 404
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

@@ -22,6 +22,7 @@ export interface WhisperClientOptions {
 export class WhisperClient implements WhisperTranscriber {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly healthEndpoint: string;
 
   constructor(
     private readonly endpoint: string,
@@ -38,8 +39,21 @@ export class WhisperClient implements WhisperTranscriber {
         'Whisper endpoint must be an unauthenticated loopback URL',
       );
     }
+    this.healthEndpoint = new URL('/health', endpointUrl).toString();
     this.fetchImpl = options.fetch ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 60_000;
+  }
+
+  async isHealthy(): Promise<boolean> {
+    try {
+      const response = await this.fetchImpl(this.healthEndpoint, {
+        method: 'GET',
+        signal: AbortSignal.timeout(Math.min(this.timeoutMs, 2_000)),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
   }
 
   async transcribe(wav: Uint8Array): Promise<string> {

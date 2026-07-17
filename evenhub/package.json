@@ -11,6 +11,8 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "pack": "evenhub pack app.json dist",
+    "pack:private": "npm run build && evenhub pack -o nanoclaw-evenhub-0.1.0.ehpk app.json dist",
+    "pack:verify": "npm run build && node scripts/verify-reproducible-pack.mjs",
     "simulate": "evenhub-simulator http://localhost:5173"
   },
   "dependencies": {
@@ -21,7 +23,7 @@
     "@evenrealities/evenhub-cli": "0.1.13",
     "@evenrealities/evenhub-simulator": "0.8.0",
     "typescript": "5.7.3",
-    "vite": "^8.1.5",
-    "vitest": "^4.1.10"
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
   }
 }

@@ -132,6 +132,84 @@ describe('EvenHub LAN API', () => {
     });
   });
 
+  it('reports approved health metadata and gates uploads on readiness', async () => {
+    let dependencies = {
+      database: 'up' as const,
+      whisper: 'down' as 'up' | 'down',
+      whatsapp: 'down' as 'up' | 'down',
+    };
+    server = new EvenHubServer({
+      host: '127.0.0.1',
+      port: 0,
+      audioDir,
+      version: '1.2.52',
+      readiness: { snapshot: async () => dependencies },
+    });
+
+    const health = await server.inject({
+      method: 'GET',
+      pathname: '/api/even/v1/healthz',
+    });
+    expect(health).toMatchObject({
+      status: 200,
+      body: {
+        status: 'degraded',
+        version: '1.2.52',
+        whisper: 'down',
+        whatsapp: 'down',
+      },
+    });
+    expect(Object.keys(health.body as object).sort()).toEqual([
+      'status',
+      'version',
+      'whatsapp',
+      'whisper',
+    ]);
+
+    const notReady = await server.inject({
+      method: 'GET',
+      pathname: '/api/even/v1/readyz',
+    });
+    expect(notReady).toMatchObject({
+      status: 503,
+      body: {
+        status: 'not_ready',
+        components: ['whisper', 'whatsapp'],
+      },
+    });
+
+    const token = await pair();
+    const rejected = await server.inject({
+      method: 'POST',
+      pathname: '/api/even/v1/turns',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'audio/L16;rate=16000;channels=1',
+        'Idempotency-Key': randomUUID(),
+        'X-Audio-Duration-Ms': '250',
+      },
+      body: new Uint8Array(8_000),
+    });
+    expect(rejected).toMatchObject({
+      status: 503,
+      body: { error: { code: 'not_ready', retryable: true } },
+    });
+    expect(fs.readdirSync(audioDir)).toHaveLength(0);
+
+    dependencies = { database: 'up', whisper: 'up', whatsapp: 'up' };
+    const ready = await server.inject({
+      method: 'GET',
+      pathname: '/api/even/v1/readyz',
+    });
+    expect(ready).toMatchObject({
+      status: 200,
+      body: {
+        status: 'ready',
+        components: ['api', 'database', 'whisper', 'whatsapp'],
+      },
+    });
+  });
+
   it('locks an address after five failed pairing attempts', async () => {
     const pairing = createEvenPairingCode();
     const wrongCode = pairing.code === '999999' ? '000000' : '999999';

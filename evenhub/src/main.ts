@@ -14,7 +14,11 @@ import type { AppState } from './state';
 import { BridgeStorage } from './storage';
 import { mountCompanionUi } from './ui';
 
-const origin = import.meta.env.VITE_EVENHUB_ORIGIN || 'https://nanoclaw.local';
+const APPROVED_ORIGIN = 'https://nanoclaw.local';
+const origin = import.meta.env.VITE_EVENHUB_ORIGIN || APPROVED_ORIGIN;
+if (origin !== APPROVED_ORIGIN) {
+  throw new Error(`VITE_EVENHUB_ORIGIN must be ${APPROVED_ORIGIN}`);
+}
 const MAX_AUDIO_BYTES = 960_000;
 const BODY_WIDTH = 576;
 const BODY_HEIGHT = 240;
