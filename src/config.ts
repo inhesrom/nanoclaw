@@ -12,6 +12,14 @@ const envConfig = readEnvFile([
   'ONECLI_URL',
   'TZ',
   'NANOCLAW_RUNTIME',
+  'EVENHUB_ENABLED',
+  'EVENHUB_HOST',
+  'EVENHUB_PORT',
+  'EVENHUB_PUBLIC_ORIGIN',
+  'EVENHUB_WHISPER_URL',
+  'EVENHUB_MAX_AUDIO_BYTES',
+  'EVENHUB_PAIRING_TTL_MS',
+  'EVENHUB_TURN_RETENTION_MS',
 ]);
 
 export const ASSISTANT_NAME =
@@ -42,6 +50,41 @@ export const SENDER_ALLOWLIST_PATH = path.join(
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
+
+export const EVENHUB_ENABLED =
+  (process.env.EVENHUB_ENABLED || envConfig.EVENHUB_ENABLED) === 'true';
+export const EVENHUB_HOST =
+  process.env.EVENHUB_HOST || envConfig.EVENHUB_HOST || '127.0.0.1';
+export const EVENHUB_PORT = parseInt(
+  process.env.EVENHUB_PORT || envConfig.EVENHUB_PORT || '18791',
+  10,
+);
+export const EVENHUB_PUBLIC_ORIGIN =
+  process.env.EVENHUB_PUBLIC_ORIGIN ||
+  envConfig.EVENHUB_PUBLIC_ORIGIN ||
+  'https://nanoclaw.local';
+export const EVENHUB_WHISPER_URL =
+  process.env.EVENHUB_WHISPER_URL ||
+  envConfig.EVENHUB_WHISPER_URL ||
+  'http://127.0.0.1:8178/inference';
+export const EVENHUB_MAX_AUDIO_BYTES = parseInt(
+  process.env.EVENHUB_MAX_AUDIO_BYTES ||
+    envConfig.EVENHUB_MAX_AUDIO_BYTES ||
+    '960000',
+  10,
+);
+export const EVENHUB_PAIRING_TTL_MS = parseInt(
+  process.env.EVENHUB_PAIRING_TTL_MS ||
+    envConfig.EVENHUB_PAIRING_TTL_MS ||
+    '300000',
+  10,
+);
+export const EVENHUB_TURN_RETENTION_MS = parseInt(
+  process.env.EVENHUB_TURN_RETENTION_MS ||
+    envConfig.EVENHUB_TURN_RETENTION_MS ||
+    '604800000',
+  10,
+);
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';

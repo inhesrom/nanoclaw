@@ -1,0 +1,21 @@
+{
+  "package_id": "dev.inhesrom.nanoclaw.evenhub",
+  "edition": "202601",
+  "name": "NanoClaw",
+  "version": "0.1.0",
+  "min_app_version": "2.0.0",
+  "min_sdk_version": "0.0.12",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "g2-microphone",
+      "desc": "Record a voice turn after an explicit tap."
+    },
+    {
+      "name": "network",
+      "desc": "Send voice turns to NanoClaw on the local network.",
+      "whitelist": ["https://nanoclaw.local"]
+    }
+  ],
+  "supported_languages": ["en"]
+}

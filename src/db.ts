@@ -10,6 +10,13 @@ import {
 } from './agent-settings.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import type {
+  EvenDevice,
+  EvenPairingAttempt,
+  EvenPairingCode,
+  EvenTurn,
+  EvenTurnState,
+} from './evenhub/types.js';
 import {
   AgentRuntime,
   AgentSettings,
@@ -89,6 +96,52 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+
+    CREATE TABLE IF NOT EXISTS even_pairing_codes (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      code_sha256 TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS even_pairing_attempts (
+      address TEXT PRIMARY KEY,
+      failures INTEGER NOT NULL DEFAULT 0,
+      locked_until TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS even_devices (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      token_sha256 TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_even_devices_active
+      ON even_devices(revoked_at, created_at);
+    CREATE TABLE IF NOT EXISTS even_turns (
+      id TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      audio_sha256 TEXT NOT NULL,
+      audio_path TEXT NOT NULL UNIQUE,
+      duration_ms INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      transcript TEXT,
+      answer TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      UNIQUE(device_id, idempotency_key),
+      FOREIGN KEY (device_id) REFERENCES even_devices(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_even_turns_device_created
+      ON even_turns(device_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_even_turns_state_updated
+      ON even_turns(state, updated_at);
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -744,6 +797,236 @@ export function getAgentDefaultSettings(): AgentSettings {
 export function setAgentDefaultSettings(settings: AgentSettings): void {
   const pruned = pruneAgentSettings(settings);
   setRouterState(AGENT_DEFAULTS_STATE_KEY, JSON.stringify(pruned));
+}
+
+// --- EvenHub LAN bridge ---
+
+export function replaceEvenPairingCode(code: EvenPairingCode): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO even_pairing_codes
+       (singleton, code_sha256, created_at, expires_at, consumed_at)
+     VALUES (1, ?, ?, ?, ?)`,
+  ).run(code.code_sha256, code.created_at, code.expires_at, code.consumed_at);
+}
+
+export function getEvenPairingCode(): EvenPairingCode | undefined {
+  return db
+    .prepare(
+      `SELECT code_sha256, created_at, expires_at, consumed_at
+       FROM even_pairing_codes WHERE singleton = 1`,
+    )
+    .get() as EvenPairingCode | undefined;
+}
+
+export function getEvenPairingAttempt(
+  address: string,
+): EvenPairingAttempt | undefined {
+  return db
+    .prepare('SELECT * FROM even_pairing_attempts WHERE address = ?')
+    .get(address) as EvenPairingAttempt | undefined;
+}
+
+export function recordEvenPairingFailure(
+  address: string,
+  now: Date,
+  failureLimit = 5,
+  lockMs = 15 * 60 * 1000,
+): EvenPairingAttempt {
+  const existing = getEvenPairingAttempt(address);
+  const stillLocked =
+    existing?.locked_until && Date.parse(existing.locked_until) > now.getTime();
+  const expiredLock =
+    existing?.locked_until &&
+    Date.parse(existing.locked_until) <= now.getTime();
+  const failures = stillLocked
+    ? existing.failures
+    : expiredLock
+      ? 1
+      : (existing?.failures ?? 0) + 1;
+  const lockedUntil =
+    stillLocked || failures >= failureLimit
+      ? existing?.locked_until || new Date(now.getTime() + lockMs).toISOString()
+      : null;
+  const attempt: EvenPairingAttempt = {
+    address,
+    failures,
+    locked_until: lockedUntil,
+    updated_at: now.toISOString(),
+  };
+  db.prepare(
+    `INSERT INTO even_pairing_attempts
+       (address, failures, locked_until, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(address) DO UPDATE SET
+       failures = excluded.failures,
+       locked_until = excluded.locked_until,
+       updated_at = excluded.updated_at`,
+  ).run(
+    attempt.address,
+    attempt.failures,
+    attempt.locked_until,
+    attempt.updated_at,
+  );
+  return attempt;
+}
+
+export function clearEvenPairingFailures(address: string): void {
+  db.prepare('DELETE FROM even_pairing_attempts WHERE address = ?').run(
+    address,
+  );
+}
+
+export function activateEvenDeviceFromPairingCode(
+  codeSha256: string,
+  device: EvenDevice,
+  now: string,
+): boolean {
+  return db.transaction(() => {
+    const consumed = db
+      .prepare(
+        `UPDATE even_pairing_codes SET consumed_at = ?
+         WHERE singleton = 1
+           AND code_sha256 = ?
+           AND consumed_at IS NULL
+           AND expires_at > ?`,
+      )
+      .run(now, codeSha256, now);
+    if (consumed.changes !== 1) return false;
+
+    db.prepare(
+      'UPDATE even_devices SET revoked_at = ? WHERE revoked_at IS NULL',
+    ).run(now);
+    db.prepare(
+      `INSERT INTO even_devices
+         (id, name, token_sha256, created_at, last_seen_at, revoked_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      device.id,
+      device.name,
+      device.token_sha256,
+      device.created_at,
+      device.last_seen_at,
+      device.revoked_at,
+    );
+    return true;
+  })();
+}
+
+export function getActiveEvenDevices(): EvenDevice[] {
+  return db
+    .prepare(
+      'SELECT * FROM even_devices WHERE revoked_at IS NULL ORDER BY created_at',
+    )
+    .all() as EvenDevice[];
+}
+
+export function touchEvenDevice(id: string, now: string): void {
+  db.prepare(
+    'UPDATE even_devices SET last_seen_at = ? WHERE id = ? AND revoked_at IS NULL',
+  ).run(now, id);
+}
+
+export function revokeAllEvenDevices(now: string): number {
+  return db
+    .prepare('UPDATE even_devices SET revoked_at = ? WHERE revoked_at IS NULL')
+    .run(now).changes;
+}
+
+export type NewEvenTurn = Pick<
+  EvenTurn,
+  | 'id'
+  | 'device_id'
+  | 'idempotency_key'
+  | 'audio_sha256'
+  | 'audio_path'
+  | 'duration_ms'
+  | 'state'
+  | 'created_at'
+  | 'updated_at'
+>;
+
+export function insertEvenTurn(turn: NewEvenTurn): void {
+  db.prepare(
+    `INSERT INTO even_turns
+       (id, device_id, idempotency_key, audio_sha256, audio_path,
+        duration_ms, state, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    turn.id,
+    turn.device_id,
+    turn.idempotency_key,
+    turn.audio_sha256,
+    turn.audio_path,
+    turn.duration_ms,
+    turn.state,
+    turn.created_at,
+    turn.updated_at,
+  );
+}
+
+export function getEvenTurnById(id: string): EvenTurn | undefined {
+  return db.prepare('SELECT * FROM even_turns WHERE id = ?').get(id) as
+    | EvenTurn
+    | undefined;
+}
+
+export function getEvenTurnForDevice(
+  id: string,
+  deviceId: string,
+): EvenTurn | undefined {
+  return db
+    .prepare('SELECT * FROM even_turns WHERE id = ? AND device_id = ?')
+    .get(id, deviceId) as EvenTurn | undefined;
+}
+
+export function getEvenTurnByIdempotencyKey(
+  deviceId: string,
+  idempotencyKey: string,
+): EvenTurn | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM even_turns
+       WHERE device_id = ? AND idempotency_key = ?`,
+    )
+    .get(deviceId, idempotencyKey) as EvenTurn | undefined;
+}
+
+export function updateEvenTurnState(
+  id: string,
+  state: EvenTurnState,
+  fields: {
+    transcript?: string;
+    answer?: string;
+    errorCode?: string;
+    errorMessage?: string;
+    completedAt?: string;
+  } = {},
+): boolean {
+  const now = new Date().toISOString();
+  return (
+    db
+      .prepare(
+        `UPDATE even_turns SET
+           state = ?,
+           transcript = COALESCE(?, transcript),
+           answer = COALESCE(?, answer),
+           error_code = COALESCE(?, error_code),
+           error_message = COALESCE(?, error_message),
+           completed_at = COALESCE(?, completed_at),
+           updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        state,
+        fields.transcript ?? null,
+        fields.answer ?? null,
+        fields.errorCode ?? null,
+        fields.errorMessage ?? null,
+        fields.completedAt ?? null,
+        now,
+        id,
+      ).changes === 1
+  );
 }
 
 // --- JSON migration ---

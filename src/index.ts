@@ -7,12 +7,18 @@ import {
   ASSISTANT_NAME,
   DEFAULT_RUNTIME,
   DEFAULT_TRIGGER,
+  EVENHUB_ENABLED,
+  EVENHUB_HOST,
+  EVENHUB_MAX_AUDIO_BYTES,
+  EVENHUB_PAIRING_TTL_MS,
+  EVENHUB_PORT,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
   ONECLI_URL,
   POLL_INTERVAL,
+  STORE_DIR,
   TIMEZONE,
 } from './config.js';
 import './channels/index.js';
@@ -72,6 +78,7 @@ import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { EvenHubServer } from './evenhub/server.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -84,6 +91,7 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+let evenHubServer: EvenHubServer | undefined;
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -618,6 +626,21 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
+  if (EVENHUB_ENABLED) {
+    evenHubServer = new EvenHubServer({
+      host: EVENHUB_HOST,
+      port: EVENHUB_PORT,
+      audioDir: path.join(STORE_DIR, 'evenhub', 'audio'),
+      maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
+      pairingTtlMs: EVENHUB_PAIRING_TTL_MS,
+    });
+    await evenHubServer.start();
+    logger.info(
+      { host: EVENHUB_HOST, port: EVENHUB_PORT },
+      'EvenHub LAN API listening',
+    );
+  }
+
   // Ensure OneCLI agents exist for all registered groups.
   // Recovers from missed creates (e.g. OneCLI was down at registration time).
   for (const [jid, group] of Object.entries(registeredGroups)) {
@@ -631,6 +654,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Shutdown signal received');
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
+    await evenHubServer?.stop();
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
