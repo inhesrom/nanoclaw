@@ -1,7 +1,7 @@
 # EvenHub retained private LAN deployment
 
 This runbook retains the original LAN diagnostic and rollback boundary on one
-Raspberry Pi 5. EvenHub 0.3.1 uses the
+Raspberry Pi 5. EvenHub 0.4.0 uses the
 [Tailscale deployment](evenhub-tailscale-deployment.md) as its sole application
 route; it never falls back to this hostname. The
 tracked files under `deploy/evenhub/` are inert templates; repository tests do
@@ -58,7 +58,7 @@ chmod 0600 .env.private
 npm test
 npm run pack:verify
 npm run pack:private
-sha256sum nanoclaw-evenhub-0.3.1.ehpk
+sha256sum nanoclaw-evenhub-0.4.0.ehpk
 ```
 
 `pack:verify` builds two packages in separate temporary paths and fails unless
@@ -225,10 +225,12 @@ only on loopback. Caddy must pass WebSocket upgrades on `/api/even/*` and return
 404 elsewhere.
 
 Pair with `npm run evenhub:pair`, enter the one-time code, then revoke and pair
-again. Run short, representative, and 30-second physical turns. Confirm immediate
-`Captured · finalizing`, changing partial snapshots, a stable final transcript,
-identical WhatsApp answer content, record-again, history, counters, paging, and
-the 30-second automatic stop. Capture stays off during this smoke sequence.
+again. Run short, representative, and 30-second physical turns. Confirm
+tap-to-start/tap-to-stop, changing live snapshots, a stable complete draft,
+review scrolling, both confirmation decisions, identical Reply content in the
+continuous feed, relaunch restoration, and automatic stop. Assert that no
+WhatsApp prompt exists before `Send` and that `Try again` starts recording only
+after discard acknowledgement. Capture stays off during this smoke sequence.
 
 ## Restart and troubleshooting
 

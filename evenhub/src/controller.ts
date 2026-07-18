@@ -1,10 +1,18 @@
 import { EvenHubApiError, type EvenHubApiPort, type LiveTurn } from './api';
 import {
+  anchorConversationEntry,
+  projectConversationFeed,
+  scrollConversation,
+  type ConversationProjection,
+} from './conversation-layout';
+import {
+  conversationEntries,
   initialState,
   reduceAppState,
   type ActiveTurn,
   type AppAction,
   type AppState,
+  type ConfirmationDecision,
   type ServerTurn,
 } from './state';
 import { STORAGE_KEYS, type StoragePort } from './storage';
@@ -12,7 +20,6 @@ import { STORAGE_KEYS, type StoragePort } from './storage';
 export interface TurnControllerOptions {
   api: EvenHubApiPort;
   storage: StoragePort;
-  paginateAnswer: (answer: string) => string[];
   onState: (state: AppState) => void;
   delay?: (milliseconds: number) => Promise<void>;
   createIdempotencyKey?: () => string;
@@ -36,6 +43,7 @@ export class TurnController {
   private recordingIdempotencyKey?: string;
   private restoredState?: { hasToken: boolean; activeTurn?: ActiveTurn };
   private readinessBlocked = false;
+  private confirmation?: Promise<ConfirmationDecision | undefined>;
   private generation = 0;
 
   constructor(private readonly options: TurnControllerOptions) {
@@ -181,12 +189,43 @@ export class TurnController {
     }
   }
 
-  nextPage(): void {
-    this.dispatch({ type: 'PAGE_NEXT' });
+  openConfirmationChoice(): void {
+    this.dispatch({ type: 'CONFIRMATION_OPEN' });
   }
 
-  previousPage(): void {
-    this.dispatch({ type: 'PAGE_PREVIOUS' });
+  closeConfirmationChoice(): void {
+    this.dispatch({ type: 'CONFIRMATION_CLOSE' });
+  }
+
+  toggleConfirmationChoice(): void {
+    this.dispatch({ type: 'CONFIRMATION_TOGGLE' });
+  }
+
+  scroll(direction: -1 | 1): void {
+    const projection = this.conversationProjection();
+    this.dispatch({
+      type: 'SCROLLED',
+      offset: scrollConversation(projection, direction),
+    });
+  }
+
+  conversationProjection(): ConversationProjection {
+    return conversationProjectionForState(this.stateValue);
+  }
+
+  confirm(
+    decision = this.stateValue.kind === 'review'
+      ? this.stateValue.choice
+      : undefined,
+  ): Promise<ConfirmationDecision | undefined> {
+    if (!decision || this.stateValue.kind !== 'review') {
+      return Promise.resolve(undefined);
+    }
+    if (this.confirmation) return this.confirmation;
+    this.confirmation = this.resolveConfirmation(decision).finally(() => {
+      this.confirmation = undefined;
+    });
+    return this.confirmation;
   }
 
   async newTurn(): Promise<void> {
@@ -195,6 +234,7 @@ export class TurnController {
     this.liveTurn = undefined;
     this.recordingIdempotencyKey = undefined;
     this.pendingUpload = undefined;
+    this.confirmation = undefined;
     this.dispatch({ type: 'READY' });
     await this.clearActiveTurn();
   }
@@ -205,6 +245,7 @@ export class TurnController {
     this.liveTurn = undefined;
     this.recordingIdempotencyKey = undefined;
     this.pendingUpload = undefined;
+    this.confirmation = undefined;
   }
 
   private async uploadPending(): Promise<void> {
@@ -319,8 +360,11 @@ export class TurnController {
     activeTurn: ActiveTurn,
     result: ServerTurn,
   ): Promise<boolean> {
+    if (result.state === 'awaiting_confirmation') {
+      this.dispatch({ type: 'TURN_UPDATED', turn: activeTurn, result });
+      return true;
+    }
     if (result.state === 'completed') {
-      const pages = this.options.paginateAnswer(result.answer || '');
       await this.options.storage.set(
         STORAGE_KEYS.lastCompletedTurnId,
         result.turnId,
@@ -330,22 +374,76 @@ export class TurnController {
         type: 'TURN_COMPLETED',
         turnId: result.turnId,
         transcript: result.transcript,
-        pages,
+        reply: result.answer || '',
       });
       return true;
     }
     if (result.state === 'failed') {
       await this.clearActiveTurn();
       this.dispatch({
-        type: 'FAILED',
+        type: 'TURN_FAILED',
+        turnId: result.turnId,
+        transcript: result.transcript,
         message:
           result.error?.message || 'NanoClaw could not process this turn.',
-        retryable: result.error?.retryable ?? false,
       });
+      return true;
+    }
+    if (result.state === 'discarded') {
+      await this.clearActiveTurn();
+      this.dispatch({ type: 'TURN_DISCARDED' });
       return true;
     }
     this.dispatch({ type: 'TURN_UPDATED', turn: activeTurn, result });
     return false;
+  }
+
+  private async resolveConfirmation(
+    decision: ConfirmationDecision,
+  ): Promise<ConfirmationDecision | undefined> {
+    const state = this.stateValue;
+    const token = this.token;
+    if (state.kind !== 'review' || !token) return undefined;
+    const activeTurn = state.turn;
+    try {
+      const result = await this.options.api.confirmTurn(
+        token,
+        activeTurn.id,
+        decision,
+      );
+      const terminal = await this.consumeTurn(activeTurn, result);
+      if (!terminal) void this.poll(activeTurn);
+      return result.state === 'discarded' ? 'discard' : 'send';
+    } catch (error) {
+      if (error instanceof EvenHubApiError && error.status === 409) {
+        try {
+          const resolved = await this.options.api.getTurn(token, activeTurn.id);
+          const terminal = await this.consumeTurn(activeTurn, resolved);
+          if (!terminal) void this.poll(activeTurn);
+          if (resolved.state === 'discarded') return 'discard';
+          if (
+            resolved.state === 'dispatching' ||
+            resolved.state === 'queued' ||
+            resolved.state === 'running' ||
+            resolved.state === 'completed'
+          ) {
+            return 'send';
+          }
+          return undefined;
+        } catch (refreshError) {
+          error = refreshError;
+        }
+      }
+      if (error instanceof EvenHubApiError && error.status === 401) {
+        await this.handleFailure(error, activeTurn, false);
+        return undefined;
+      }
+      this.dispatch({
+        type: 'CONFIRMATION_FAILED',
+        message: `${errorMessage(error)} Draft not sent.`,
+      });
+      throw error;
+    }
   }
 
   private async handleFailure(
@@ -412,6 +510,26 @@ export class TurnController {
     this.stateValue = reduceAppState(this.stateValue, action);
     this.options.onState(this.stateValue);
   }
+}
+
+export function conversationProjectionForState(
+  state: AppState,
+): ConversationProjection {
+  const entries = conversationEntries(state);
+  const all = projectConversationFeed(entries, { offset: 0 });
+  let offset = all.maxOffset;
+  const session = state.session;
+  if (session.manuallyScrolled) {
+    offset = session.scrollOffset;
+  } else if (session.anchorTurnId) {
+    const replyId = entries.some(
+      (entry) => entry.id === `${session.anchorTurnId}:reply`,
+    )
+      ? `${session.anchorTurnId}:reply`
+      : `${session.anchorTurnId}:failure`;
+    offset = anchorConversationEntry(all, replyId);
+  }
+  return projectConversationFeed(entries, { offset });
 }
 
 function errorMessage(error: unknown): string {

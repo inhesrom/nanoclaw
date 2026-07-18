@@ -36,9 +36,9 @@ describe('G2Recorder', () => {
         submitTurn: vi.fn(),
         startLiveTurn,
         getTurn: vi.fn(),
+        confirmTurn: vi.fn(),
       },
       storage: new MemoryStorage(),
-      paginateAnswer: (answer) => [answer],
       onState: () => undefined,
       createIdempotencyKey: () => 'key-live',
     });
@@ -94,9 +94,9 @@ describe('G2Recorder', () => {
         pair: vi.fn(),
         submitTurn,
         getTurn: vi.fn(),
+        confirmTurn: vi.fn(),
       },
       storage: new MemoryStorage(),
-      paginateAnswer: (answer) => [answer],
       onState: () => undefined,
     });
     const bridge = {
@@ -144,9 +144,9 @@ describe('G2Recorder', () => {
         submitTurn: vi.fn(),
         startLiveTurn: () => ({ push: vi.fn(), finish: vi.fn(), abort }),
         getTurn: vi.fn(),
+        confirmTurn: vi.fn(),
       },
       storage: new MemoryStorage(),
-      paginateAnswer: (answer) => [answer],
       onState: (state) => states.push(state.kind),
     });
     const recorder = new G2Recorder({

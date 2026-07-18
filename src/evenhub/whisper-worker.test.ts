@@ -112,12 +112,12 @@ describe('EvenHubSttWorker', () => {
 
     expect(calls).toEqual(['first turn', 'second turn']);
     expect(getEvenTurnById('turn-1')).toMatchObject({
-      state: 'dispatching',
+      state: 'awaiting_confirmation',
       transcript: 'first turn',
       stt_attempts: 1,
     });
     expect(getEvenTurnById('turn-2')).toMatchObject({
-      state: 'dispatching',
+      state: 'awaiting_confirmation',
       transcript: 'second turn',
       stt_attempts: 1,
     });
@@ -145,7 +145,7 @@ describe('EvenHubSttWorker', () => {
     await stt.waitForIdle();
 
     expect(getEvenTurnById('turn-interrupted')).toMatchObject({
-      state: 'dispatching',
+      state: 'awaiting_confirmation',
       transcript: 'recovered after restart',
       stt_attempts: 1,
     });
@@ -181,7 +181,7 @@ describe('EvenHubSttWorker', () => {
     expect(attempts).toBe(2);
     expect(delays).toEqual([1_000]);
     expect(getEvenTurnById('turn-retry')).toMatchObject({
-      state: 'dispatching',
+      state: 'awaiting_confirmation',
       transcript: 'recovered',
       stt_attempts: 2,
     });
@@ -265,7 +265,7 @@ describe('EvenHubSttWorker', () => {
     await stt.waitForIdle();
 
     expect(getEvenTurnById('turn-capture-failure')).toMatchObject({
-      state: 'dispatching',
+      state: 'awaiting_confirmation',
       transcript: 'ordinary transcript',
     });
     expect(JSON.stringify(silentLogger.warn.mock.calls)).not.toContain(

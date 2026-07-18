@@ -25,7 +25,35 @@ describe('EvenHub Tailscale API', () => {
     );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({
       method: 'GET',
+      headers: { 'X-EvenHub-Protocol-Version': '2' },
       signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('posts explicit confirmation decisions with protocol and bearer headers', async () => {
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({ turnId: 'turn-1', state: 'discarded' }),
+      } as Response),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new EvenHubApi(origin).confirmTurn('token', 'turn-1', 'discard');
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      `${origin}/api/even/v1/turns/turn-1/confirmation`,
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer token',
+        'Content-Type': 'application/json',
+        'X-EvenHub-Protocol-Version': '2',
+      },
+      body: JSON.stringify({ decision: 'discard' }),
     });
   });
 

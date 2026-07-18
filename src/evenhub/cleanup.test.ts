@@ -52,7 +52,7 @@ describe('cleanupEvenHubStorage', () => {
 
   function turn(
     id: string,
-    state: 'accepted' | 'completed',
+    state: 'accepted' | 'awaiting_confirmation' | 'completed' | 'discarded',
     timestamp: string,
   ) {
     const audioPath = path.join(audioDir, `${id}.pcm`);
@@ -99,5 +99,22 @@ describe('cleanupEvenHubStorage', () => {
     expect(fs.existsSync(activePath)).toBe(true);
     expect(fs.existsSync(orphanPath)).toBe(false);
     expect(fs.existsSync(freshPath)).toBe(true);
+  });
+
+  it('retains unresolved drafts for seven days and then expires them', () => {
+    const now = new Date('2026-07-16T12:00:00.000Z');
+    turn('old-draft', 'awaiting_confirmation', '2026-07-08T00:00:00.000Z');
+    turn('recent-draft', 'awaiting_confirmation', '2026-07-12T00:00:00.000Z');
+
+    const result = cleanupEvenHubStorage(audioDir, 7 * DAY_MS, {
+      now,
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(result.expiredTurns).toBe(1);
+    expect(getEvenTurnById('old-draft')).toBeUndefined();
+    expect(getEvenTurnById('recent-draft')?.state).toBe(
+      'awaiting_confirmation',
+    );
   });
 });

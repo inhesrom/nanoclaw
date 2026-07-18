@@ -34,7 +34,6 @@ export interface EvenHubSttWorkerOptions {
   delay?: (milliseconds: number) => Promise<void>;
   logger?: WorkerLogger;
   maxAudioBytes?: number;
-  onDispatchReady?: () => void;
 }
 
 const defaultDelay = (milliseconds: number) =>
@@ -45,7 +44,6 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
   private readonly capture?: EvenHubSttWorkerOptions['capture'];
   private readonly logger: WorkerLogger;
   private readonly maxAudioBytes: number;
-  private readonly onDispatchReady?: () => void;
   private running = false;
   private workRequested = false;
   private stopping = false;
@@ -59,7 +57,6 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
     this.capture = options.capture;
     this.logger = options.logger ?? defaultLogger;
     this.maxAudioBytes = options.maxAudioBytes ?? 960_000;
-    this.onDispatchReady = options.onDispatchReady;
   }
 
   start(): void {
@@ -172,7 +169,7 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
         const persisted = transitionEvenTurnState(
           turn.id,
           'transcribing',
-          'dispatching',
+          'awaiting_confirmation',
           { transcript },
         );
         if (!persisted) return;
@@ -180,14 +177,13 @@ export class EvenHubSttWorker implements EvenTurnProcessor {
         this.logger.info(
           {
             turn_id: turn.id,
-            state: 'dispatching',
+            state: 'awaiting_confirmation',
             attempt: attempts,
             inference_ms: Date.now() - inferenceStartedAt,
             elapsed_ms: Date.now() - startedAt,
           },
           'stt.completed',
         );
-        this.onDispatchReady?.();
         return;
       } catch (error) {
         const retryable = !(error instanceof SttClientError) || error.retryable;

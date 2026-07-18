@@ -12,6 +12,7 @@ import {
   getEvenPairingCode,
   getEvenTurnForDevice,
   recordEvenPairingFailure,
+  resolveEvenTurnConfirmation,
   touchEvenDevice,
   transitionEvenTurnState,
 } from '../db.js';
@@ -32,6 +33,8 @@ const AUDIO_CONTENT_TYPE = 'audio/L16;rate=16000;channels=1';
 const MAX_JSON_BYTES = 16 * 1024;
 const PAIR_FAILURE_LIMIT = 5;
 const PAIR_LOCK_MS = 15 * 60 * 1000;
+export const EVENHUB_PROTOCOL_VERSION = 2;
+export const EVENHUB_RELEASE_VERSION = '0.4.0';
 
 export interface EvenTurnProcessor {
   process(turn: EvenTurn): Promise<void>;
@@ -48,6 +51,7 @@ export interface EvenHubServerOptions {
   publicOrigin?: string;
   streamingStt?: SttStreamingProvider;
   finalizer?: EvenTurnFinalizer;
+  onDispatchReady?: () => void;
   version?: string;
 }
 
@@ -87,7 +91,7 @@ function corsHeaders(): Record<string, string> {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers':
-      'Authorization, Content-Type, Idempotency-Key, X-Audio-Duration-Ms',
+      'Authorization, Content-Type, Idempotency-Key, X-Audio-Duration-Ms, X-EvenHub-Protocol-Version',
     'Access-Control-Max-Age': '600',
   };
 }
@@ -209,6 +213,19 @@ function authorize(request: IncomingMessage): EvenDevice {
   }
   touchEvenDevice(device.id, new Date().toISOString());
   return device;
+}
+
+function requireProtocolVersion(request: IncomingMessage): void {
+  if (
+    request.headers['x-evenhub-protocol-version'] !==
+    String(EVENHUB_PROTOCOL_VERSION)
+  ) {
+    throw new ApiError(
+      426,
+      'client_upgrade_required',
+      `X-EvenHub-Protocol-Version must be ${EVENHUB_PROTOCOL_VERSION}`,
+    );
+  }
 }
 
 function validateTurnHeaders(request: IncomingMessage): {
@@ -397,13 +414,14 @@ export class EvenHubServer {
           status: Object.values(dependencies).every((state) => state === 'up')
             ? 'ok'
             : 'degraded',
-          version: this.options.version ?? 'unknown',
+          version: this.options.version ?? EVENHUB_RELEASE_VERSION,
           stt: dependencies.stt,
           whatsapp: dependencies.whatsapp,
         });
         return;
       }
       if (request.method === 'GET' && pathname === '/api/even/v1/readyz') {
+        requireProtocolVersion(request);
         const dependencies = await this.dependencies();
         const unavailable = Object.entries(dependencies)
           .filter(([, state]) => state === 'down')
@@ -414,6 +432,7 @@ export class EvenHubServer {
             unavailable.length === 0
               ? ['api', 'database', 'stt', 'whatsapp']
               : unavailable,
+          protocolVersion: EVENHUB_PROTOCOL_VERSION,
         });
         return;
       }
@@ -435,6 +454,13 @@ export class EvenHubServer {
       const turnMatch = pathname.match(/^\/api\/even\/v1\/turns\/([^/]+)$/);
       if (request.method === 'GET' && turnMatch) {
         this.handleGetTurn(request, response, turnMatch[1]);
+        return;
+      }
+      const confirmationMatch = pathname.match(
+        /^\/api\/even\/v1\/turns\/([^/]+)\/confirmation$/,
+      );
+      if (request.method === 'POST' && confirmationMatch) {
+        await this.handleConfirmation(request, response, confirmationMatch[1]);
         return;
       }
       throw new ApiError(404, 'not_found', 'Route not found');
@@ -588,6 +614,7 @@ export class EvenHubServer {
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
+    requireProtocolVersion(request);
     const dependencies = await this.dependencies();
     const unavailable = Object.entries(dependencies)
       .filter(([, state]) => state === 'down')
@@ -669,6 +696,7 @@ export class EvenHubServer {
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
+    requireProtocolVersion(request);
     if (!this.streaming) {
       throw new ApiError(
         503,
@@ -718,9 +746,69 @@ export class EvenHubServer {
     response: ServerResponse,
     turnId: string,
   ): void {
+    requireProtocolVersion(request);
     const device = authorize(request);
     const turn = getEvenTurnForDevice(turnId, device.id);
     if (!turn) throw new ApiError(404, 'turn_not_found', 'Turn not found');
     sendJson(response, 200, toPublicEvenTurn(turn));
+  }
+
+  private async handleConfirmation(
+    request: IncomingMessage,
+    response: ServerResponse,
+    turnId: string,
+  ): Promise<void> {
+    requireProtocolVersion(request);
+    const device = authorize(request);
+    const turn = getEvenTurnForDevice(turnId, device.id);
+    if (!turn) throw new ApiError(404, 'turn_not_found', 'Turn not found');
+
+    const body = await readJson(request);
+    const decision =
+      body && typeof body === 'object'
+        ? (body as Record<string, unknown>).decision
+        : undefined;
+    if (decision !== 'send' && decision !== 'discard') {
+      throw new ApiError(
+        400,
+        'invalid_confirmation_decision',
+        'decision must be send or discard',
+      );
+    }
+
+    const result = resolveEvenTurnConfirmation(turn.id, decision);
+    if (!result || result.status === 'conflict') {
+      throw new ApiError(
+        409,
+        'turn_already_resolved',
+        'Turn has already been resolved',
+      );
+    }
+    if (result.status === 'resolved') {
+      logger.info(
+        { turn_id: turn.id, state: result.turn.state },
+        'even.turn.confirmed',
+      );
+    }
+    if (decision === 'send') {
+      try {
+        this.options.onDispatchReady?.();
+      } catch (error) {
+        logger.error(
+          {
+            turn_id: turn.id,
+            state: result.turn.state,
+            error_type: error instanceof Error ? error.name : 'UnknownError',
+          },
+          'even.dispatch_wake_failed',
+        );
+      }
+    }
+    sendJson(
+      response,
+      200,
+      toPublicEvenTurn(result.turn),
+      result.status === 'idempotent' ? { 'Confirmation-Replayed': 'true' } : {},
+    );
   }
 }

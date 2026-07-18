@@ -1,44 +1,69 @@
-# EvenHub WhatsApp turn lifecycle
+# EvenHub confirmed turn lifecycle
 
-After local speech recognition persists a transcript, NanoClaw relays it through
-the registered WhatsApp main self-chat. This deliberately reuses normal message
-storage, group context, queueing, agent execution, and reply delivery instead of
-creating a second agent path.
+EvenHub 0.4.0 uses one durable lifecycle:
+
+```text
+recording → transcribing → awaiting_confirmation
+                               ├─ Send → dispatching → queued → running → completed
+                               └─ Try again → discarded
+```
+
+`failed` is terminal from transcription, dispatch, queue, or agent execution.
+Live partial speech transcripts are display-only. Streaming and fallback STT
+persist the normalized final text as a draft transcript in
+`awaiting_confirmation`, delete PCM, and stop. A timeout, restart, lost
+response, or network failure never advances the turn.
+
+## Confirmation boundary
+
+Paired protocol-2 clients resolve a device-owned turn with:
+
+```http
+POST /api/even/v1/turns/:turnId/confirmation
+Authorization: Bearer <device token>
+X-EvenHub-Protocol-Version: 2
+Content-Type: application/json
+
+{ "decision": "send" }
+```
+
+The decision is `send` or `discard`. The host atomically records the decision
+and changes `awaiting_confirmation` to `dispatching` or `discarded`. Repeating
+the same decision returns `200`; a conflicting or late decision returns
+`409 turn_already_resolved`. A turn owned by another device returns `404`, under
+the existing bearer-token rules. The first decision from the G2 or companion
+wins.
 
 ## Prompt correlation
 
-The coordinator processes one G2 prompt at a time:
+Only a confirmed `send` wakes the WhatsApp bridge. The coordinator processes
+one G2 prompt at a time:
 
-1. Reserve a Baileys-compatible message ID in `even_turns` while the turn is
-   `dispatching`.
-2. Send the raw transcript to the registered WhatsApp self-chat with that ID.
+1. Reserve a Baileys-compatible message ID while the turn is `dispatching`.
+2. Send the draft transcript to the registered WhatsApp self-chat with that ID.
 3. Store the confirmed message with a host-only `even_turn_id`; never put a
    correlation marker in visible text.
-4. Compare-and-set the turn to `queued`. The normal NanoClaw message loop marks
-   it `running` when agent processing starts.
+4. Compare-and-set to `queued`; the normal message loop marks it `running` when
+   agent processing starts.
 
-If the local message was stored before a restart, reconciliation can safely
-finish `dispatching → queued` without another relay. A reserved ID without a
-stored message is ambiguous. Because remote custom-ID deduplication has not yet
-passed the physical WhatsApp integration gate, recovery fails that turn closed
-instead of risking a duplicate visible prompt.
+If the local prompt was stored before restart, reconciliation can finish
+`dispatching → queued` without another relay. A reserved ID without a stored
+prompt is ambiguous and fails closed rather than risking a duplicate prompt.
 
-## Reply boundary
+## Reply and feed boundary
 
-The first non-empty correlated agent result uses a confirmed WhatsApp send. Only
-after that send returns a message ID does NanoClaw atomically store the exact
-send argument as `answer` and move `running → completed`. The API and G2 paging
-consume that same immutable Unicode string. Logs contain IDs, states, timings,
-and lengths, never transcript or answer text.
+After a confirmed WhatsApp send, NanoClaw stores the exact outbound Unicode
+string as the Reply and moves `running → completed`. The G2 and companion place
+that same string after the preceding `You:` entry in their continuous
+conversation feed. They keep completed and failed turns for the current app
+session; only an unresolved draft is restored after relaunch.
 
-An unconfirmed reply becomes terminal `whatsapp_unavailable`. A process restart
-while a turn is `running` is delivery-ambiguous and becomes `agent_failed`; it is
-not replayed. Agent failures before any reply retain the normal queue retry
-budget, then become `agent_failed` when retries are exhausted.
+Logs contain IDs, states, timings, and lengths, never audio, draft transcripts,
+prompts, or replies.
 
 ## Retention
 
-Completed and failed turns remain readable for seven days by default. Daily
-cleanup removes expired rows and deletes unreferenced `.part`, `.tmp`, or `.pcm`
-files older than one hour. Referenced nonterminal audio is never treated as an
-orphan.
+Awaiting-confirmation, discarded, completed, and failed turns remain readable
+for seven days by default. Daily cleanup removes expired rows and unreferenced
+`.part`, `.tmp`, or `.pcm` files older than one hour. STT removes a turn's PCM
+as soon as its draft is persisted.

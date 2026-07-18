@@ -1,6 +1,7 @@
 import type { ServerTurn } from './state';
 
 export const TAILSCALE_UNAVAILABLE_MESSAGE = 'Connect Tailscale and retry.';
+export const EVENHUB_PROTOCOL_VERSION = 2;
 
 export class EvenHubApiError extends Error {
   constructor(
@@ -22,7 +23,7 @@ export interface SttSession {
   sessionId: string;
   ticket: string;
   expiresAt: string;
-  protocolVersion: 1;
+  protocolVersion: 2;
   audio: {
     encoding: 's16le';
     sampleRate: 16000;
@@ -58,10 +59,19 @@ export interface EvenHubApiPort {
     onSnapshot: (snapshot: TranscriptSnapshot) => void,
   ): LiveTurn;
   getTurn(token: string, turnId: string): Promise<ServerTurn>;
+  confirmTurn(
+    token: string,
+    turnId: string,
+    decision: 'send' | 'discard',
+  ): Promise<ServerTurn>;
 }
 
 interface ErrorEnvelope {
   error?: { code?: string; message?: string; retryable?: boolean };
+}
+
+function protocolHeaders(): Record<string, string> {
+  return { 'X-EvenHub-Protocol-Version': String(EVENHUB_PROTOCOL_VERSION) };
 }
 
 export class EvenHubApi implements EvenHubApiPort {
@@ -73,6 +83,7 @@ export class EvenHubApi implements EvenHubApiPort {
     try {
       await this.request('/api/even/v1/readyz', {
         method: 'GET',
+        headers: protocolHeaders(),
         signal: controller.signal,
       });
     } finally {
@@ -103,6 +114,7 @@ export class EvenHubApi implements EvenHubApiPort {
         'Content-Type': 'audio/L16;rate=16000;channels=1',
         'Idempotency-Key': idempotencyKey,
         'X-Audio-Duration-Ms': String(durationMs),
+        ...protocolHeaders(),
       },
       body: audio,
     });
@@ -110,8 +122,27 @@ export class EvenHubApi implements EvenHubApiPort {
 
   getTurn(token: string, turnId: string): Promise<ServerTurn> {
     return this.request<ServerTurn>(`/api/even/v1/turns/${turnId}`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, ...protocolHeaders() },
     });
+  }
+
+  confirmTurn(
+    token: string,
+    turnId: string,
+    decision: 'send' | 'discard',
+  ): Promise<ServerTurn> {
+    return this.request<ServerTurn>(
+      `/api/even/v1/turns/${turnId}/confirmation`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...protocolHeaders(),
+        },
+        body: JSON.stringify({ decision }),
+      },
+    );
   }
 
   startLiveTurn(
@@ -135,6 +166,7 @@ export class EvenHubApi implements EvenHubApiPort {
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
+        ...protocolHeaders(),
       },
       body: JSON.stringify({ idempotencyKey }),
     });
@@ -256,7 +288,7 @@ class EvenHubLiveTurn implements LiveTurn {
     socket.addEventListener('open', () => {
       this.sendJson({
         type: 'start',
-        version: 1,
+        version: EVENHUB_PROTOCOL_VERSION,
         session: session.sessionId,
         ticket: session.ticket,
         format: { encoding: 's16le', sampleRate: 16_000, channels: 1 },

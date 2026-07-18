@@ -86,7 +86,7 @@ import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import { EvenHubServer } from './evenhub/server.js';
+import { EVENHUB_RELEASE_VERSION, EvenHubServer } from './evenhub/server.js';
 import { MoonshineClient } from './evenhub/stt-client.js';
 import { EvenHubSttWorker } from './evenhub/whisper-worker.js';
 import { EvenTurnFinalizer } from './evenhub/turn-finalizer.js';
@@ -136,17 +136,6 @@ function isEvenHubWhatsAppReady(): boolean {
     target.channel.sendSelfMessage &&
     target.channel.sendMessageConfirmed,
   );
-}
-
-function getNanoClawVersion(): string {
-  try {
-    const metadata = JSON.parse(
-      fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'),
-    ) as { version?: unknown };
-    return typeof metadata.version === 'string' ? metadata.version : 'unknown';
-  } catch {
-    return 'unknown';
-  }
 }
 
 function markCorrelatedTurnsRunning(messages: NewMessage[]): string[] {
@@ -783,12 +772,10 @@ async function main(): Promise<void> {
       audioDir: evenHubAudioDir,
       maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
       capture,
-      onDispatchReady: () => evenHubWhatsAppBridge?.requestDispatch(),
     });
     evenHubSttWorker = new EvenHubSttWorker(stt, {
       capture,
       maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
-      onDispatchReady: () => evenHubWhatsAppBridge?.requestDispatch(),
     });
     evenHubSttWorker.start();
     evenHubServer = new EvenHubServer({
@@ -802,7 +789,8 @@ async function main(): Promise<void> {
       publicOrigin: EVENHUB_PUBLIC_ORIGIN,
       streamingStt: stt,
       finalizer,
-      version: getNanoClawVersion(),
+      onDispatchReady: () => evenHubWhatsAppBridge?.requestDispatch(),
+      version: EVENHUB_RELEASE_VERSION,
     });
     await evenHubServer.start();
     const dependencies = await readiness.snapshot();
@@ -810,7 +798,7 @@ async function main(): Promise<void> {
       {
         host: EVENHUB_HOST,
         port: EVENHUB_PORT,
-        version: getNanoClawVersion(),
+        version: EVENHUB_RELEASE_VERSION,
         ...dependencies,
       },
       'even.service_started',

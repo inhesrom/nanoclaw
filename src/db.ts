@@ -129,6 +129,7 @@ function createSchema(database: Database.Database): void {
       audio_path TEXT NOT NULL UNIQUE,
       audio_duration_ms INTEGER NOT NULL,
       state TEXT NOT NULL,
+      confirmation_decision TEXT,
       transcript TEXT,
       whatsapp_message_id TEXT UNIQUE,
       answer TEXT,
@@ -289,6 +290,21 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+  try {
+    database.exec(
+      `ALTER TABLE even_turns ADD COLUMN confirmation_decision TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+  // A 0.3 draft may have reached dispatching before the host was upgraded.
+  // Re-open only turns that have never reserved a WhatsApp message.
+  database.exec(
+    `UPDATE even_turns
+     SET state = 'awaiting_confirmation'
+     WHERE state = 'dispatching' AND whatsapp_message_id IS NULL
+       AND confirmation_decision IS NULL`,
+  );
 }
 
 export function initDatabase(): void {
@@ -1093,12 +1109,14 @@ export function transitionEvenTurnState(
   if (expectedStates.length === 0) return false;
   const legalTransitions: Record<EvenTurnState, readonly EvenTurnState[]> = {
     accepted: ['transcribing', 'failed'],
-    transcribing: ['dispatching', 'failed'],
+    transcribing: ['awaiting_confirmation', 'failed'],
+    awaiting_confirmation: ['dispatching', 'discarded'],
     dispatching: ['queued', 'failed'],
     queued: ['running', 'failed'],
     running: ['completed', 'failed'],
     completed: [],
     failed: [],
+    discarded: [],
   };
   if (
     expectedStates.some(
@@ -1139,6 +1157,51 @@ export function transitionEvenTurnState(
         ...expectedStates,
       ).changes === 1
   );
+}
+
+export type EvenTurnConfirmationResult =
+  | { status: 'resolved' | 'idempotent'; turn: EvenTurn }
+  | { status: 'conflict'; turn: EvenTurn };
+
+/** Atomically resolves a draft. The recorded decision makes retries unambiguous. */
+export function resolveEvenTurnConfirmation(
+  id: string,
+  decision: 'send' | 'discard',
+): EvenTurnConfirmationResult | undefined {
+  const resolve = db.transaction((): EvenTurnConfirmationResult | undefined => {
+    const turn = getEvenTurnById(id);
+    if (!turn) return undefined;
+    if (turn.confirmation_decision) {
+      return {
+        status:
+          turn.confirmation_decision === decision ? 'idempotent' : 'conflict',
+        turn,
+      };
+    }
+    if (turn.state !== 'awaiting_confirmation') {
+      return { status: 'conflict', turn };
+    }
+
+    const now = new Date().toISOString();
+    const nextState = decision === 'send' ? 'dispatching' : 'discarded';
+    const changed = db
+      .prepare(
+        `UPDATE even_turns
+         SET state = ?, confirmation_decision = ?, updated_at = ?,
+             completed_at = CASE WHEN ? = 'discard' THEN ? ELSE completed_at END
+         WHERE id = ? AND state = 'awaiting_confirmation'
+           AND confirmation_decision IS NULL`,
+      )
+      .run(nextState, decision, now, decision, now, id).changes;
+    const resolved = getEvenTurnById(id)!;
+    if (changed === 1) return { status: 'resolved', turn: resolved };
+    return {
+      status:
+        resolved.confirmation_decision === decision ? 'idempotent' : 'conflict',
+      turn: resolved,
+    };
+  });
+  return resolve();
 }
 
 export function reconcileEvenSttTurns(): number {
@@ -1299,7 +1362,7 @@ export function getExpiredEvenTurns(cutoff: string): EvenTurn[] {
   return db
     .prepare(
       `SELECT * FROM even_turns
-       WHERE state IN ('completed', 'failed')
+       WHERE state IN ('awaiting_confirmation', 'completed', 'failed', 'discarded')
          AND COALESCE(completed_at, updated_at) < ?
        ORDER BY COALESCE(completed_at, updated_at) ASC`,
     )
@@ -1311,7 +1374,8 @@ export function deleteExpiredEvenTurn(id: string, cutoff: string): boolean {
     db
       .prepare(
         `DELETE FROM even_turns
-         WHERE id = ? AND state IN ('completed', 'failed')
+         WHERE id = ?
+           AND state IN ('awaiting_confirmation', 'completed', 'failed', 'discarded')
            AND COALESCE(completed_at, updated_at) < ?`,
       )
       .run(id, cutoff).changes === 1

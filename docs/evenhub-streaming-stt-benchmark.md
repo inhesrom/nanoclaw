@@ -7,10 +7,12 @@ There is no cloud inference fallback.
 
 ## Smoke before capture
 
-With capture off, run a short, representative, and 30-second physical G2 turn.
-Verify immediate stop feedback, changed partial snapshots, stable final text,
-WhatsApp delivery, record-again, history, paging, counters, and automatic stop.
-Fix smoke failures before arming the corpus.
+With capture off, run short, representative, and 30-second physical G2 turns.
+Verify tap-to-stop, changed partial snapshots, stable complete draft review,
+four-line feed scrolling, both confirmation decisions, no dispatch before
+`Send`, replacement recording after acknowledged discard, conversation history,
+relaunch restoration, and automatic stop. Fix smoke failures before arming the
+corpus.
 
 ## Capture the authoritative corpus
 

@@ -9,6 +9,7 @@ import {
   _closeDatabase,
   _initTestDatabase,
   getActiveEvenDevices,
+  getEvenTurnById,
   transitionEvenTurnState,
 } from '../db.js';
 import { createEvenPairingCode } from './pairing.js';
@@ -17,27 +18,30 @@ import { EvenHubServer } from './server.js';
 describe('EvenHub LAN API', () => {
   let server: EvenHubServer;
   let audioDir: string;
+  let dispatchWakes: number;
 
   beforeEach(async () => {
     _initTestDatabase();
+    dispatchWakes = 0;
     audioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-evenhub-'));
     server = new EvenHubServer({
       host: '127.0.0.1',
       port: 0,
       audioDir,
+      onDispatchReady: () => {
+        dispatchWakes += 1;
+      },
       processor: {
         async process(turn) {
           transitionEvenTurnState(turn.id, 'accepted', 'transcribing');
-          transitionEvenTurnState(turn.id, 'transcribing', 'dispatching', {
-            transcript: 'fixture audio',
-          });
-          transitionEvenTurnState(turn.id, 'dispatching', 'queued');
-          transitionEvenTurnState(turn.id, 'queued', 'running');
-          transitionEvenTurnState(turn.id, 'running', 'completed', {
-            transcript: 'fixture audio',
-            answer: 'Fixture answer from the injected processor.',
-            completedAt: new Date().toISOString(),
-          });
+          transitionEvenTurnState(
+            turn.id,
+            'transcribing',
+            'awaiting_confirmation',
+            {
+              transcript: 'fixture audio',
+            },
+          );
         },
       },
     });
@@ -62,7 +66,7 @@ describe('EvenHub LAN API', () => {
     return body.token;
   }
 
-  it('pairs, durably accepts a turn, completes it, and replays safely', async () => {
+  it('stops at confirmation, dispatches only after Send, and replays safely', async () => {
     const token = await pair();
     const [storedDevice] = getActiveEvenDevices();
     expect(storedDevice.token_sha256).toMatch(/^[a-f0-9]{64}$/);
@@ -75,6 +79,7 @@ describe('EvenHub LAN API', () => {
       'Content-Type': 'audio/L16;rate=16000;channels=1',
       'Idempotency-Key': idempotencyKey,
       'X-Audio-Duration-Ms': '250',
+      'X-EvenHub-Protocol-Version': '2',
     };
     const accepted = await server.inject({
       method: 'POST',
@@ -92,20 +97,40 @@ describe('EvenHub LAN API', () => {
       fs.existsSync(path.join(audioDir, `${acceptedTurn.turnId}.pcm`)),
     ).toBe(true);
 
-    let completed: { state: string; answer?: string } | undefined;
+    let draft:
+      | { state: string; transcript?: string; answer?: string }
+      | undefined;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const result = await server.inject({
         method: 'GET',
         pathname: `/api/even/v1/turns/${acceptedTurn.turnId}`,
-        headers: { Authorization: `Bearer ${token}` },
+        headers: protocolAuth(token),
       });
-      completed = result.body as typeof completed;
-      if (completed?.state === 'completed') break;
+      draft = result.body as typeof draft;
+      if (draft?.state === 'awaiting_confirmation') break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    expect(completed).toMatchObject({
-      state: 'completed',
+    expect(draft).toMatchObject({
+      state: 'awaiting_confirmation',
+      transcript: 'fixture audio',
+    });
+    expect(draft?.answer).toBeUndefined();
+    expect(dispatchWakes).toBe(0);
+
+    const sent = await server.inject({
+      method: 'POST',
+      pathname: `/api/even/v1/turns/${acceptedTurn.turnId}/confirmation`,
+      headers: { ...protocolAuth(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'send' }),
+    });
+    expect(sent.body).toMatchObject({ state: 'dispatching' });
+    expect(dispatchWakes).toBe(1);
+
+    transitionEvenTurnState(acceptedTurn.turnId, 'dispatching', 'queued');
+    transitionEvenTurnState(acceptedTurn.turnId, 'queued', 'running');
+    transitionEvenTurnState(acceptedTurn.turnId, 'running', 'completed', {
       answer: 'Fixture answer from the injected processor.',
+      completedAt: new Date().toISOString(),
     });
 
     const replay = await server.inject({
@@ -170,12 +195,14 @@ describe('EvenHub LAN API', () => {
     const notReady = await server.inject({
       method: 'GET',
       pathname: '/api/even/v1/readyz',
+      headers: protocolHeader(),
     });
     expect(notReady).toMatchObject({
       status: 503,
       body: {
         status: 'not_ready',
         components: ['stt', 'whatsapp'],
+        protocolVersion: 2,
       },
     });
 
@@ -188,6 +215,7 @@ describe('EvenHub LAN API', () => {
         'Content-Type': 'audio/L16;rate=16000;channels=1',
         'Idempotency-Key': randomUUID(),
         'X-Audio-Duration-Ms': '250',
+        'X-EvenHub-Protocol-Version': '2',
       },
       body: new Uint8Array(8_000),
     });
@@ -201,12 +229,14 @@ describe('EvenHub LAN API', () => {
     const ready = await server.inject({
       method: 'GET',
       pathname: '/api/even/v1/readyz',
+      headers: protocolHeader(),
     });
     expect(ready).toMatchObject({
       status: 200,
       body: {
         status: 'ready',
         components: ['api', 'database', 'stt', 'whatsapp'],
+        protocolVersion: 2,
       },
     });
   });
@@ -243,6 +273,7 @@ describe('EvenHub LAN API', () => {
         'Content-Type': 'application/octet-stream',
         'Idempotency-Key': randomUUID(),
         'X-Audio-Duration-Ms': '250',
+        'X-EvenHub-Protocol-Version': '2',
       },
       body: new Uint8Array(8_000),
     });
@@ -260,6 +291,7 @@ describe('EvenHub LAN API', () => {
         'Content-Type': 'audio/L16;rate=16000;channels=1',
         'Idempotency-Key': randomUUID(),
         'X-Audio-Duration-Ms': '250',
+        'X-EvenHub-Protocol-Version': '2',
       },
       body: new Uint8Array(8_001),
     });
@@ -280,6 +312,7 @@ describe('EvenHub LAN API', () => {
         'Content-Type': 'audio/L16;rate=16000;channels=1',
         'Idempotency-Key': randomUUID(),
         'X-Audio-Duration-Ms': '250',
+        'X-EvenHub-Protocol-Version': '2',
       },
       body: new Uint8Array(8_000),
     });
@@ -289,15 +322,120 @@ describe('EvenHub LAN API', () => {
     const revoked = await server.inject({
       method: 'GET',
       pathname: `/api/even/v1/turns/${turnId}`,
-      headers: { Authorization: `Bearer ${firstToken}` },
+      headers: protocolAuth(firstToken),
     });
     expect(revoked.status).toBe(401);
 
     const notOwned = await server.inject({
       method: 'GET',
       pathname: `/api/even/v1/turns/${turnId}`,
-      headers: { Authorization: `Bearer ${replacementToken}` },
+      headers: protocolAuth(replacementToken),
     });
     expect(notOwned.status).toBe(404);
+    const confirmationNotOwned = await server.inject({
+      method: 'POST',
+      pathname: `/api/even/v1/turns/${turnId}/confirmation`,
+      headers: {
+        ...protocolAuth(replacementToken),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ decision: 'send' }),
+    });
+    expect(confirmationNotOwned.status).toBe(404);
   });
+
+  it('makes identical decisions idempotent and conflicting decisions safe', async () => {
+    const token = await pair();
+    const accepted = await createTurn(token);
+    await waitForTurnState(accepted.turnId, 'awaiting_confirmation');
+    const request = {
+      method: 'POST',
+      pathname: `/api/even/v1/turns/${accepted.turnId}/confirmation`,
+      headers: { ...protocolAuth(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'discard' }),
+    };
+
+    const discarded = await server.inject(request);
+    expect(discarded.body).toMatchObject({ state: 'discarded' });
+    const replay = await server.inject(request);
+    expect(replay.status).toBe(200);
+    expect(replay.headers['Confirmation-Replayed']).toBe('true');
+
+    const conflict = await server.inject({
+      ...request,
+      body: JSON.stringify({ decision: 'send' }),
+    });
+    expect(conflict).toMatchObject({
+      status: 409,
+      body: { error: { code: 'turn_already_resolved' } },
+    });
+  });
+
+  it('rejects old clients before accepting audio while health and pairing stay public', async () => {
+    const health = await server.inject({
+      method: 'GET',
+      pathname: '/api/even/v1/healthz',
+    });
+    expect(health.status).toBe(200);
+    const token = await pair();
+
+    const oldReady = await server.inject({
+      method: 'GET',
+      pathname: '/api/even/v1/readyz',
+      headers: { 'X-EvenHub-Protocol-Version': '1' },
+    });
+    expect(oldReady).toMatchObject({
+      status: 426,
+      body: { error: { code: 'client_upgrade_required' } },
+    });
+    const oldTurn = await server.inject({
+      method: 'POST',
+      pathname: '/api/even/v1/turns',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'audio/L16;rate=16000;channels=1',
+        'Idempotency-Key': randomUUID(),
+        'X-Audio-Duration-Ms': '250',
+        'X-EvenHub-Protocol-Version': '1',
+      },
+      body: new Uint8Array(8_000),
+    });
+    expect(oldTurn.status).toBe(426);
+    expect(fs.readdirSync(audioDir)).toHaveLength(0);
+  });
+
+  async function createTurn(token: string): Promise<{ turnId: string }> {
+    const response = await server.inject({
+      method: 'POST',
+      pathname: '/api/even/v1/turns',
+      headers: {
+        ...protocolAuth(token),
+        'Content-Type': 'audio/L16;rate=16000;channels=1',
+        'Idempotency-Key': randomUUID(),
+        'X-Audio-Duration-Ms': '250',
+      },
+      body: new Uint8Array(8_000),
+    });
+    expect(response.status).toBe(202);
+    return response.body as { turnId: string };
+  }
+
+  async function waitForTurnState(
+    turnId: string,
+    state: string,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (getEvenTurnById(turnId)?.state === state) return;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`Turn did not reach ${state}`);
+  }
 });
+
+function protocolHeader(): Record<string, string> {
+  return { 'X-EvenHub-Protocol-Version': '2' };
+}
+
+function protocolAuth(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}`, ...protocolHeader() };
+}

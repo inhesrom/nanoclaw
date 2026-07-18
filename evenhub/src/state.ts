@@ -1,11 +1,17 @@
+import type { ConversationEntry } from './conversation-layout';
+
 export type ServerTurnState =
   | 'accepted'
   | 'transcribing'
+  | 'awaiting_confirmation'
   | 'dispatching'
   | 'queued'
   | 'running'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'discarded';
+
+export type ConfirmationDecision = 'send' | 'discard';
 
 export interface ServerTurn {
   turnId: string;
@@ -24,15 +30,18 @@ export interface ActiveTurn {
   idempotencyKey: string;
 }
 
-export interface CompletedTurn {
+export interface ConversationTurn {
   turnId: string;
   transcript?: string;
-  pages: string[];
+  reply?: string;
+  failure?: string;
 }
 
 export interface SessionState {
-  turns: CompletedTurn[];
-  turn: number;
+  turns: ConversationTurn[];
+  scrollOffset: number;
+  manuallyScrolled: boolean;
+  anchorTurnId?: string;
 }
 
 type AppViewState =
@@ -47,7 +56,11 @@ type AppViewState =
       interimText?: string;
     }
   | { kind: 'stopping'; finalText?: string; interimText?: string }
-  | { kind: 'uploading'; idempotencyKey: string }
+  | {
+      kind: 'uploading';
+      idempotencyKey: string;
+      transcript?: string;
+    }
   | {
       kind: 'transcribing';
       turn: ActiveTurn;
@@ -55,17 +68,18 @@ type AppViewState =
       notice?: string;
     }
   | {
+      kind: 'review';
+      turn: ActiveTurn;
+      transcript: string;
+      choiceOpen: boolean;
+      choice: ConfirmationDecision;
+      notice?: string;
+    }
+  | {
       kind: 'thinking';
       turn: ActiveTurn;
       transcript?: string;
       notice?: string;
-    }
-  | {
-      kind: 'answer';
-      turnId: string;
-      transcript?: string;
-      pages: string[];
-      page: number;
     }
   | {
       kind: 'error';
@@ -89,26 +103,42 @@ export type AppAction =
   | { type: 'STREAM_FINAL'; turn: ActiveTurn; result: ServerTurn }
   | { type: 'TURN_UPDATED'; turn: ActiveTurn; result: ServerTurn }
   | { type: 'POLL_NOTICE'; message: string }
+  | { type: 'CONFIRMATION_OPEN' }
+  | { type: 'CONFIRMATION_CLOSE' }
+  | { type: 'CONFIRMATION_TOGGLE' }
+  | { type: 'CONFIRMATION_FAILED'; message: string }
   | {
       type: 'TURN_COMPLETED';
       turnId: string;
       transcript?: string;
-      pages: string[];
+      reply: string;
     }
+  | {
+      type: 'TURN_FAILED';
+      turnId: string;
+      transcript?: string;
+      message: string;
+    }
+  | { type: 'TURN_DISCARDED' }
+  | { type: 'SCROLLED'; offset: number }
   | {
       type: 'FAILED';
       message: string;
       retryable: boolean;
       activeTurn?: ActiveTurn;
     }
-  | { type: 'PAGE_NEXT' }
-  | { type: 'PAGE_PREVIOUS' }
   | { type: 'READY' }
   | { type: 'PAIRING_REQUIRED'; message?: string };
 
+const emptySession: SessionState = {
+  turns: [],
+  scrollOffset: 0,
+  manuallyScrolled: false,
+};
+
 export const initialState: AppState = {
   kind: 'booting',
-  session: { turns: [], turn: 0 },
+  session: emptySession,
 };
 
 export function reduceAppState(state: AppState, action: AppAction): AppState {
@@ -132,7 +162,11 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
             kind: 'recording',
             startedAt: action.startedAt,
             bytes: 0,
-            session,
+            session: {
+              ...session,
+              manuallyScrolled: false,
+              anchorTurnId: undefined,
+            },
           }
         : state;
     case 'RECORD_PROGRESS':
@@ -158,80 +192,104 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
         : state;
     case 'UPLOAD_STARTED':
       return state.kind === 'stopping' || state.kind === 'error'
-        ? { kind: 'uploading', idempotencyKey: action.idempotencyKey, session }
+        ? {
+            kind: 'uploading',
+            idempotencyKey: action.idempotencyKey,
+            transcript:
+              state.kind === 'stopping' ? snapshotText(state) : undefined,
+            session,
+          }
         : state;
     case 'TURN_ACCEPTED':
       return state.kind === 'uploading'
-        ? { kind: 'transcribing', turn: action.turn, session }
+        ? {
+            kind: 'transcribing',
+            turn: action.turn,
+            transcript: state.transcript,
+            session,
+          }
         : state;
     case 'STREAM_FINAL':
       if (state.kind !== 'stopping') return state;
-      return {
-        kind:
-          action.result.state === 'accepted' ||
-          action.result.state === 'transcribing'
-            ? 'transcribing'
-            : 'thinking',
-        turn: action.turn,
-        transcript: action.result.transcript,
-        session,
-      };
+      return stateForServerTurn(state, action.turn, action.result);
     case 'TURN_UPDATED':
-      if (
-        state.kind !== 'transcribing' &&
-        state.kind !== 'thinking' &&
-        state.kind !== 'uploading'
-      ) {
-        return state;
-      }
-      if (
-        action.result.state === 'accepted' ||
-        action.result.state === 'transcribing'
-      ) {
-        return {
-          kind: 'transcribing',
-          turn: action.turn,
-          transcript: action.result.transcript,
-          notice:
-            state.kind === 'transcribing' || state.kind === 'thinking'
-              ? state.notice
-              : undefined,
-          session,
-        };
-      }
-      if (
-        action.result.state === 'dispatching' ||
-        action.result.state === 'queued' ||
-        action.result.state === 'running'
-      ) {
-        return {
-          kind: 'thinking',
-          turn: action.turn,
-          transcript: action.result.transcript,
-          notice:
-            state.kind === 'transcribing' || state.kind === 'thinking'
-              ? state.notice
-              : undefined,
-          session,
-        };
-      }
-      return state;
+      if (!hasActiveServerTurn(state)) return state;
+      return stateForServerTurn(state, action.turn, action.result);
     case 'POLL_NOTICE':
-      return state.kind === 'transcribing' || state.kind === 'thinking'
+      return state.kind === 'transcribing' ||
+        state.kind === 'thinking' ||
+        state.kind === 'review'
+        ? { ...state, notice: action.message }
+        : state;
+    case 'CONFIRMATION_OPEN':
+      return state.kind === 'review'
+        ? { ...state, choiceOpen: true, choice: 'send', notice: undefined }
+        : state;
+    case 'CONFIRMATION_CLOSE':
+      return state.kind === 'review'
+        ? { ...state, choiceOpen: false, notice: undefined }
+        : state;
+    case 'CONFIRMATION_TOGGLE':
+      return state.kind === 'review' && state.choiceOpen
+        ? {
+            ...state,
+            choice: state.choice === 'send' ? 'discard' : 'send',
+          }
+        : state;
+    case 'CONFIRMATION_FAILED':
+      return state.kind === 'review'
         ? { ...state, notice: action.message }
         : state;
     case 'TURN_COMPLETED': {
-      const pages =
-        action.pages.length > 0 ? action.pages : ['(empty response)'];
-      const turns = session.turns
-        .filter((turn) => turn.turnId !== action.turnId)
-        .concat({
-          turnId: action.turnId,
-          transcript: action.transcript,
-          pages,
-        });
-      return answerAt({ turns, turn: turns.length - 1 }, turns.length - 1, 0);
+      const turns = upsertConversationTurn(session.turns, {
+        turnId: action.turnId,
+        transcript: action.transcript,
+        reply: action.reply || '(empty response)',
+      });
+      return {
+        kind: 'ready',
+        session: {
+          ...session,
+          turns,
+          manuallyScrolled: false,
+          anchorTurnId: action.turnId,
+        },
+      };
     }
+    case 'TURN_FAILED': {
+      const turns = upsertConversationTurn(session.turns, {
+        turnId: action.turnId,
+        transcript: action.transcript,
+        failure: action.message,
+      });
+      return {
+        kind: 'ready',
+        session: {
+          ...session,
+          turns,
+          manuallyScrolled: false,
+          anchorTurnId: action.turnId,
+        },
+      };
+    }
+    case 'TURN_DISCARDED':
+      return {
+        kind: 'ready',
+        session: {
+          ...session,
+          manuallyScrolled: false,
+          anchorTurnId: undefined,
+        },
+      };
+    case 'SCROLLED':
+      return {
+        ...state,
+        session: {
+          ...session,
+          scrollOffset: action.offset,
+          manuallyScrolled: true,
+        },
+      };
     case 'FAILED':
       return {
         kind: 'error',
@@ -240,45 +298,118 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
         activeTurn: action.activeTurn,
         session,
       };
-    case 'PAGE_NEXT':
-      return state.kind === 'answer' ? moveAnswer(state, 1) : state;
-    case 'PAGE_PREVIOUS':
-      return state.kind === 'answer' ? moveAnswer(state, -1) : state;
   }
 }
 
-function moveAnswer(
-  state: Extract<AppState, { kind: 'answer' }>,
-  direction: -1 | 1,
-): AppState {
-  if (direction === 1) {
-    if (state.page < state.pages.length - 1) {
-      return { ...state, page: state.page + 1 };
+export function conversationEntries(state: AppState): ConversationEntry[] {
+  const entries: ConversationEntry[] = [];
+  for (const turn of state.session.turns) {
+    if (turn.transcript) {
+      entries.push({
+        id: `${turn.turnId}:you`,
+        speaker: 'You',
+        text: turn.transcript,
+      });
     }
-    if (state.session.turn < state.session.turns.length - 1) {
-      const turn = state.session.turn + 1;
-      return answerAt(state.session, turn, 0);
+    if (turn.reply) {
+      entries.push({
+        id: `${turn.turnId}:reply`,
+        speaker: 'NanoClaw',
+        text: turn.reply,
+      });
+    } else if (turn.failure) {
+      entries.push({
+        id: `${turn.turnId}:failure`,
+        speaker: 'Notice',
+        text: turn.failure,
+      });
     }
-    return state;
   }
 
-  if (state.page > 0) return { ...state, page: state.page - 1 };
-  if (state.session.turn > 0) {
-    const turn = state.session.turn - 1;
-    const previous = state.session.turns[turn];
-    return answerAt(state.session, turn, previous.pages.length - 1);
+  const active = activeTranscript(state);
+  if (
+    active?.text &&
+    !state.session.turns.some((turn) => turn.turnId === active.turnId)
+  ) {
+    entries.push({
+      id: `${active.turnId}:you`,
+      speaker: 'You',
+      text: active.text,
+    });
+  }
+  return entries;
+}
+
+function stateForServerTurn(
+  state: AppState,
+  turn: ActiveTurn,
+  result: ServerTurn,
+): AppState {
+  const transcript = result.transcript || currentTranscript(state);
+  if (result.state === 'accepted' || result.state === 'transcribing') {
+    return { kind: 'transcribing', turn, transcript, session: state.session };
+  }
+  if (result.state === 'awaiting_confirmation') {
+    return {
+      kind: 'review',
+      turn,
+      transcript: transcript || '(no speech recognized)',
+      choiceOpen: false,
+      choice: 'send',
+      session: { ...state.session, manuallyScrolled: false },
+    };
+  }
+  if (
+    result.state === 'dispatching' ||
+    result.state === 'queued' ||
+    result.state === 'running'
+  ) {
+    return { kind: 'thinking', turn, transcript, session: state.session };
   }
   return state;
 }
 
-function answerAt(session: SessionState, turn: number, page: number): AppState {
-  const selected = session.turns[turn];
-  return {
-    kind: 'answer',
-    turnId: selected.turnId,
-    transcript: selected.transcript,
-    pages: selected.pages,
-    page,
-    session: { ...session, turn },
-  };
+function hasActiveServerTurn(state: AppState): boolean {
+  return (
+    state.kind === 'transcribing' ||
+    state.kind === 'thinking' ||
+    state.kind === 'review' ||
+    state.kind === 'uploading'
+  );
+}
+
+function activeTranscript(
+  state: AppState,
+): { turnId: string; text?: string } | undefined {
+  if (state.kind === 'recording' || state.kind === 'stopping') {
+    return { turnId: 'draft', text: snapshotText(state) };
+  }
+  if (state.kind === 'uploading') {
+    return { turnId: 'draft', text: state.transcript };
+  }
+  if (
+    state.kind === 'transcribing' ||
+    state.kind === 'review' ||
+    state.kind === 'thinking'
+  ) {
+    return { turnId: state.turn.id, text: state.transcript };
+  }
+  return undefined;
+}
+
+function currentTranscript(state: AppState): string | undefined {
+  return activeTranscript(state)?.text;
+}
+
+function snapshotText(
+  state: Extract<AppState, { kind: 'recording' | 'stopping' }>,
+): string {
+  return [state.finalText, state.interimText].filter(Boolean).join(' ').trim();
+}
+
+function upsertConversationTurn(
+  turns: ConversationTurn[],
+  next: ConversationTurn,
+): ConversationTurn[] {
+  return turns.filter((turn) => turn.turnId !== next.turnId).concat(next);
 }

@@ -6,10 +6,9 @@ import {
 } from '@evenrealities/even_hub_sdk';
 
 import { EvenHubApi } from './api';
-import { TurnController } from './controller';
+import { conversationProjectionForState, TurnController } from './controller';
 import { routeHubInteraction } from './event-routing';
 import { CoalescingGlassesRenderer } from './glasses-renderer';
-import { paginate } from './paginate';
 import { handlePrimaryTap } from './primary-tap';
 import { G2Recorder } from './recorder';
 import type { AppState } from './state';
@@ -21,8 +20,6 @@ if (!origin) throw new Error('VITE_EVENHUB_ORIGIN is required');
 const BODY_WIDTH = 576;
 const BODY_HEIGHT = 240;
 const BODY_PADDING = 4;
-const INNER_WIDTH = BODY_WIDTH - BODY_PADDING * 2;
-const INNER_HEIGHT = BODY_HEIGHT - BODY_PADDING * 2;
 
 interface HubEvent {
   audioEvent?: { audioPcm?: Uint8Array };
@@ -65,10 +62,15 @@ await bridge.createStartUpPageContainer(
 );
 
 const controllerRef: { current?: TurnController } = {};
+const recorderRef: { current?: G2Recorder } = {};
 const companion = mountCompanionUi({
   onPair: (code) => controllerRef.current!.pair(code),
   onRetry: () => controllerRef.current!.retry(),
   onNewTurn: () => controllerRef.current!.newTurn(),
+  onConfirm: async (decision) => {
+    const resolved = await controllerRef.current!.confirm(decision);
+    if (resolved === 'discard') await recorderRef.current?.start();
+  },
 });
 const glasses = new CoalescingGlassesRenderer({
   bridge,
@@ -83,8 +85,6 @@ function render(state: AppState): void {
 const controller = new TurnController({
   api: new EvenHubApi(origin),
   storage: new BridgeStorage(bridge),
-  paginateAnswer: (answer) =>
-    paginate(answer, { width: INNER_WIDTH, height: INNER_HEIGHT }),
   onState: render,
 });
 controllerRef.current = controller;
@@ -95,6 +95,7 @@ const recorder = new G2Recorder({
   onCloseError: (error) =>
     console.error('Could not close the G2 microphone:', error),
 });
+recorderRef.current = recorder;
 
 let unsubscribe: () => void = () => undefined;
 let cleanedUp = false;
@@ -112,15 +113,27 @@ unsubscribe = bridge.onEvenHubEvent((event: HubEvent) => {
 
   const interaction = routeHubInteraction(event);
   if (interaction === 'exit') {
+    if (controller.state.kind === 'review' && controller.state.choiceOpen) {
+      controller.closeConfirmationChoice();
+      return;
+    }
     void bridge.shutDownPageContainer(1);
     return;
   }
   if (interaction === 'previous') {
-    controller.previousPage();
+    if (controller.state.kind === 'review' && controller.state.choiceOpen) {
+      controller.toggleConfirmationChoice();
+    } else {
+      controller.scroll(-1);
+    }
     return;
   }
   if (interaction === 'next') {
-    controller.nextPage();
+    if (controller.state.kind === 'review' && controller.state.choiceOpen) {
+      controller.toggleConfirmationChoice();
+    } else {
+      controller.scroll(1);
+    }
     return;
   }
   if (interaction === 'primary') {
@@ -150,6 +163,9 @@ void controller.boot().catch((error) => {
 });
 
 function glassesView(state: AppState): { body: string; pager: string } {
+  const feed = conversationProjectionForState(state);
+  const feedBody = feed.body || 'NanoClaw\n\nTap to record';
+  const hint = contextualHint(feed.hasEarlier, feed.hasLater);
   switch (state.kind) {
     case 'booting':
       return {
@@ -163,57 +179,60 @@ function glassesView(state: AppState): { body: string; pager: string } {
       };
     case 'ready':
       return {
-        body: 'NanoClaw\n\nTap to record',
-        pager: 'Tap: start · double-tap: exit',
+        body: feedBody,
+        pager: joinStatus(hint, 'Tap: record'),
       };
     case 'recording':
       return {
-        body: snapshotText(state)
-          ? `Recording… ${(state.bytes / 32_000).toFixed(1)}s\n\n${snapshotText(state)}`
-          : `Recording…\n\n${(state.bytes / 32_000).toFixed(1)} seconds`,
-        pager: 'Tap: send',
+        body: feed.body || 'Listening…',
+        pager: joinStatus(
+          hint,
+          `Listening ${(state.bytes / 32_000).toFixed(1)}s · tap: stop`,
+        ),
       };
     case 'stopping':
       return {
-        body: snapshotText(state)
-          ? `Captured · finalizing\n\n${snapshotText(state)}`
-          : 'Captured · finalizing',
-        pager: 'Timer frozen',
+        body: feed.body || 'Transcribing…',
+        pager: joinStatus(hint, 'Transcribing'),
       };
     case 'uploading':
       return {
-        body: 'Audio captured\n\nSending securely…',
-        pager: 'Private tailnet',
+        body: feed.body || 'Transcribing…',
+        pager: joinStatus(hint, 'Transcribing'),
       };
     case 'transcribing':
       return {
-        body: state.notice || state.transcript || 'Transcribing locally…',
-        pager: 'Local STT on NanoClaw host',
+        body: feed.body || 'Transcribing…',
+        pager: joinStatus(hint, state.notice || 'Transcribing'),
+      };
+    case 'review':
+      return {
+        body: feedBody,
+        pager: state.choiceOpen
+          ? state.choice === 'send'
+            ? '› Send     Try again'
+            : '  Send   › Try again'
+          : joinStatus(hint, state.notice || 'Tap: choose'),
       };
     case 'thinking':
       return {
-        body: state.notice || state.transcript || 'NanoClaw is thinking…',
-        pager: 'Shared WhatsApp context',
+        body: feed.body || 'NanoClaw is thinking…',
+        pager: joinStatus(hint, state.notice || 'Thinking'),
       };
-    case 'answer': {
-      const hasNext =
-        state.page < state.pages.length - 1 ||
-        state.session.turn < state.session.turns.length - 1;
-      return {
-        body: state.pages[state.page],
-        pager: `Turn ${state.session.turn + 1}/${state.session.turns.length} · Page ${state.page + 1}/${state.pages.length} · ${hasNext ? 'tap: next' : 'tap: record'} · swipe up: prev`,
-      };
-    }
     case 'error':
       return {
-        body: `Could not complete the turn\n\n${state.message}`,
+        body: feed.body || 'NanoClaw',
         pager: state.retryable ? 'Retry in companion' : 'Return in companion',
       };
   }
 }
 
-function snapshotText(
-  state: Extract<AppState, { kind: 'recording' | 'stopping' }>,
-): string {
-  return [state.finalText, state.interimText].filter(Boolean).join(' ').trim();
+function contextualHint(earlier: boolean, later: boolean): string {
+  return [earlier ? 'Earlier' : '', later ? 'Later' : '']
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function joinStatus(hint: string, status: string): string {
+  return [hint, status].filter(Boolean).join(' · ');
 }

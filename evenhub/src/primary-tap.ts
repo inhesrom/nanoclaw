@@ -2,7 +2,10 @@ import type { TurnController } from './controller';
 import type { G2Recorder } from './recorder';
 
 interface PrimaryTapActions {
-  controller: Pick<TurnController, 'state' | 'newTurn' | 'nextPage'>;
+  controller: Pick<
+    TurnController,
+    'state' | 'openConfirmationChoice' | 'confirm'
+  >;
   recorder: Pick<G2Recorder, 'start' | 'finish'>;
 }
 
@@ -19,15 +22,11 @@ export async function handlePrimaryTap({
     await recorder.finish();
     return;
   }
-  if (state.kind !== 'answer') return;
-
-  const hasLaterPage = state.page < state.pages.length - 1;
-  const hasLaterTurn = state.session.turn < state.session.turns.length - 1;
-  if (hasLaterPage || hasLaterTurn) {
-    controller.nextPage();
+  if (state.kind !== 'review') return;
+  if (!state.choiceOpen) {
+    controller.openConfirmationChoice();
     return;
   }
-
-  await controller.newTurn();
-  await recorder.start();
+  const decision = await controller.confirm();
+  if (decision === 'discard') await recorder.start();
 }

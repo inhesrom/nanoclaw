@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { initialState, reduceAppState } from '../src/state';
+import {
+  conversationEntries,
+  initialState,
+  reduceAppState,
+} from '../src/state';
 
 describe('EvenHub app reducer', () => {
-  it('follows the approved turn lifecycle', () => {
+  it('stops at draft review before entering thinking', () => {
     const ready = reduceAppState(initialState, {
       type: 'RESTORED',
       hasToken: true,
@@ -15,10 +19,6 @@ describe('EvenHub app reducer', () => {
     const stopping = reduceAppState(recording, {
       type: 'RECORD_STOP_REQUESTED',
     });
-    expect(stopping).toEqual({
-      kind: 'stopping',
-      session: { turns: [], turn: 0 },
-    });
     const uploading = reduceAppState(stopping, {
       type: 'UPLOAD_STARTED',
       idempotencyKey: 'key',
@@ -28,46 +28,53 @@ describe('EvenHub app reducer', () => {
       type: 'TURN_ACCEPTED',
       turn: active,
     });
-    const thinking = reduceAppState(transcribing, {
+    const review = reduceAppState(transcribing, {
       type: 'TURN_UPDATED',
       turn: active,
-      result: {
-        turnId: 'turn-1',
-        state: 'running',
-        transcript: 'hello',
-        createdAt: 'now',
-        updatedAt: 'now',
-        pollAfterMs: 500,
-      },
+      result: serverTurn('awaiting_confirmation'),
     });
-    const answer = reduceAppState(thinking, {
-      type: 'TURN_COMPLETED',
-      turnId: 'turn-1',
+
+    expect(review).toMatchObject({
+      kind: 'review',
       transcript: 'hello',
-      pages: ['one', 'two'],
+      choiceOpen: false,
+      choice: 'send',
     });
-    expect(answer).toMatchObject({ kind: 'answer', page: 0 });
-    expect(reduceAppState(answer, { type: 'PAGE_NEXT' })).toMatchObject({
-      kind: 'answer',
-      page: 1,
+    const open = reduceAppState(review, { type: 'CONFIRMATION_OPEN' });
+    expect(open).toMatchObject({
+      kind: 'review',
+      choiceOpen: true,
+      choice: 'send',
     });
+    expect(reduceAppState(open, { type: 'CONFIRMATION_TOGGLE' })).toMatchObject(
+      {
+        choice: 'discard',
+      },
+    );
+
+    const thinking = reduceAppState(review, {
+      type: 'TURN_UPDATED',
+      turn: active,
+      result: serverTurn('dispatching'),
+    });
+    expect(thinking.kind).toBe('thinking');
   });
 
-  it('restores a durable active turn directly into polling state', () => {
+  it('restores only the durable unresolved turn', () => {
     expect(
       reduceAppState(initialState, {
         type: 'RESTORED',
         hasToken: true,
         activeTurn: { id: 'turn-1', idempotencyKey: 'key' },
       }),
-    ).toEqual({
+    ).toMatchObject({
       kind: 'transcribing',
       turn: { id: 'turn-1', idempotencyKey: 'key' },
-      session: { turns: [], turn: 0 },
+      session: { turns: [] },
     });
   });
 
-  it('carries complete transcript snapshots through immediate stop feedback', () => {
+  it('carries live transcript snapshots through immediate stop feedback', () => {
     const ready = reduceAppState(initialState, {
       type: 'RESTORED',
       hasToken: true,
@@ -82,62 +89,66 @@ describe('EvenHub app reducer', () => {
       interimText: 'window seat',
     });
 
-    expect(
-      reduceAppState(snapshot, { type: 'RECORD_STOP_REQUESTED' }),
-    ).toMatchObject({
+    const stopping = reduceAppState(snapshot, {
+      type: 'RECORD_STOP_REQUESTED',
+    });
+    expect(stopping).toMatchObject({
       kind: 'stopping',
       finalText: 'book the',
       interimText: 'window seat',
     });
-  });
-
-  it('ignores impossible recording transitions', () => {
-    const pairing = reduceAppState(initialState, {
-      type: 'RESTORED',
-      hasToken: false,
+    expect(conversationEntries(stopping).at(-1)).toMatchObject({
+      speaker: 'You',
+      text: 'book the window seat',
     });
-    expect(
-      reduceAppState(pairing, { type: 'RECORD_STARTED', startedAt: 10 }),
-    ).toBe(pairing);
   });
 
-  it('keeps completed turns in session and pages across turn boundaries', () => {
+  it('keeps completed and failed turns in one chronological session feed', () => {
     const first = reduceAppState(initialState, {
       type: 'TURN_COMPLETED',
       turnId: 'turn-1',
       transcript: 'first prompt',
-      pages: ['first a', 'first b'],
+      reply: 'first reply',
     });
-    const ready = reduceAppState(first, { type: 'READY' });
-    const second = reduceAppState(ready, {
-      type: 'TURN_COMPLETED',
+    const second = reduceAppState(first, {
+      type: 'TURN_FAILED',
       turnId: 'turn-2',
       transcript: 'second prompt',
-      pages: ['second'],
+      message: 'Agent failed safely.',
     });
 
+    expect(second.kind).toBe('ready');
     expect(second.session.turns).toHaveLength(2);
-    expect(second).toMatchObject({
-      kind: 'answer',
-      turnId: 'turn-2',
-      page: 0,
-      session: { turn: 1 },
-    });
+    expect(conversationEntries(second)).toEqual([
+      { id: 'turn-1:you', speaker: 'You', text: 'first prompt' },
+      { id: 'turn-1:reply', speaker: 'NanoClaw', text: 'first reply' },
+      { id: 'turn-2:you', speaker: 'You', text: 'second prompt' },
+      { id: 'turn-2:failure', speaker: 'Notice', text: 'Agent failed safely.' },
+    ]);
+  });
 
-    const previousTurn = reduceAppState(second, { type: 'PAGE_PREVIOUS' });
-    expect(previousTurn).toMatchObject({
-      kind: 'answer',
+  it('marks manual scrolling without losing the feed', () => {
+    const completed = reduceAppState(initialState, {
+      type: 'TURN_COMPLETED',
       turnId: 'turn-1',
-      page: 1,
-      session: { turn: 0 },
+      transcript: 'prompt',
+      reply: 'reply',
     });
-
-    const nextTurn = reduceAppState(previousTurn, { type: 'PAGE_NEXT' });
-    expect(nextTurn).toMatchObject({
-      kind: 'answer',
-      turnId: 'turn-2',
-      page: 0,
-      session: { turn: 1 },
+    expect(
+      reduceAppState(completed, { type: 'SCROLLED', offset: 4 }),
+    ).toMatchObject({
+      session: { scrollOffset: 4, manuallyScrolled: true },
     });
   });
 });
+
+function serverTurn(state: 'awaiting_confirmation' | 'dispatching') {
+  return {
+    turnId: 'turn-1',
+    state,
+    transcript: 'hello',
+    createdAt: 'now',
+    updatedAt: 'now',
+    pollAfterMs: 500,
+  } as const;
+}

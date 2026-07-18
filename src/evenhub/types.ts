@@ -1,11 +1,13 @@
 export const EVEN_TURN_STATES = [
   'accepted',
   'transcribing',
+  'awaiting_confirmation',
   'dispatching',
   'queued',
   'running',
   'completed',
   'failed',
+  'discarded',
 ] as const;
 
 export type EvenTurnState = (typeof EVEN_TURN_STATES)[number];
@@ -41,6 +43,7 @@ export interface EvenTurn {
   audio_path: string;
   audio_duration_ms: number;
   state: EvenTurnState;
+  confirmation_decision: 'send' | 'discard' | null;
   transcript: string | null;
   whatsapp_message_id: string | null;
   answer: string | null;

@@ -1,90 +1,53 @@
-# EvenHub streaming STT protocol v1
+# EvenHub streaming STT protocol v2
 
-The external protocol is authenticated in two steps. The paired companion first
-creates a 60-second ticket with bearer-authenticated
-`POST /api/even/v1/stt-sessions`, sending its turn UUIDv4 as
-`{"idempotencyKey":"..."}`. The response contains `sessionId`, a random ticket,
-expiry, protocol version, and the fixed audio limits. Only the SHA-256 of the
-ticket is held in memory.
+EvenHub 0.4.0 requires `X-EvenHub-Protocol-Version: 2` on readiness and every
+authenticated STT/turn request. Missing or older versions receive
+`426 client_upgrade_required`; `/healthz` and pairing remain exempt. Host and
+plugin are released together and protocol 2 has no immediate-dispatch fallback.
 
-Version 0.3.0 first probes
-`https://<device>.<tailnet>.ts.net/api/even/v1/readyz`; a network failure keeps
-recording disabled and shows `Connect Tailscale and retry.` The client has no
-`nanoclaw.local` fallback.
+The paired companion creates a 60-second, single-use ticket with
+`POST /api/even/v1/stt-sessions`, its bearer token, the protocol header, and
+`{"idempotencyKey":"<UUIDv4>"}`. The response contains session ID, random
+ticket, expiry, protocol version 2, and fixed audio limits. Only the ticket hash
+is retained in memory.
 
-The companion then opens
+The client then opens
 `wss://<device>.<tailnet>.ts.net/api/even/v1/stt-stream`. The URL contains no
-credential. The WebSocket Origin must be exactly
-the private origin compiled into the package or the installed EvenHub WebView's observed,
-per-launch `http://127.0.0.1:<ephemeral-port>` origin. The loopback form accepts
-only canonical numeric ports 49152–65535; other hosts, schemes, ports, paths,
-missing origins, and lookalikes are rejected. The first message within five
-seconds must be:
+credential. Origin must match the compiled private origin or the installed
+EvenHub WebView's canonical `http://127.0.0.1:<49152-65535>` origin. The first
+message within five seconds is:
 
 ```json
 {
   "type": "start",
-  "version": 1,
+  "version": 2,
   "session": "session ID",
   "ticket": "single-use ticket",
-  "format": {
-    "encoding": "s16le",
-    "sampleRate": 16000,
-    "channels": 1
-  }
+  "format": { "encoding": "s16le", "sampleRate": 16000, "channels": 1 }
 }
 ```
 
-After `{"type":"ready","version":1}`, every binary message is a four-byte
+After `{"type":"ready","version":2}`, every binary message is a four-byte
 big-endian sequence followed by an even, nonempty PCM payload. Sequence starts
-at zero and has no gaps or duplicates. The client retains all PCM locally while
-streaming it.
+at zero with no gaps or duplicates. The client retains complete PCM until final
+commit. Snapshot messages contain complete `finalText` and `interimText`, never
+deltas; the host emits changed snapshots at most every 500 ms and never stores
+partials.
 
-Transcript feedback is a complete snapshot, never a delta:
+Tap-to-stop freezes the timer immediately. The client sends `finish` with next
+sequence, integer duration, and SHA-256 of the retained PCM. After validating
+order, bytes, duration, hash, and a nonempty Moonshine result, the host persists
+the normalized draft as `awaiting_confirmation`, deletes PCM, and returns the
+public turn envelope. It does not wake WhatsApp. The client stops polling and
+shows the complete draft until explicit confirmation.
 
-```json
-{
-  "type": "snapshot",
-  "finalText": "stable prefix",
-  "interimText": "mutable suffix"
-}
-```
+Limits remain 30 seconds/960,000 PCM bytes, one active stream per device, two
+globally, and 256 KiB backpressure. Ticket, format, sequence, size, finish, and
+disconnect failures delete the owner-only partial file and create no turn.
 
-The server emits changed snapshots at most once per 500 ms. Partial text is
-display-only and is not inserted into the turn database or turn history.
-
-Stop freezes the glasses timer immediately. The client calculates SHA-256 over
-the complete retained PCM and sends:
-
-```json
-{
-  "type": "finish",
-  "nextSequence": 12,
-  "durationMs": 2750,
-  "sha256": "64 lowercase hexadecimal characters"
-}
-```
-
-After validating order, byte count, duration, hash, and a nonempty Moonshine
-final, the server durably finalizes the ordinary turn and sends
-`{"type":"final", ...}` using the existing public turn envelope. The phone then
-polls that same turn for the NanoClaw/WhatsApp answer.
-
-Errors have only a stable code, retryability, and the content-free message
-`Streaming session rejected`. Tokens, tickets, audio, transcripts, hypotheses,
-and answers are forbidden from logs.
-
-Limits are 30 seconds/960,000 PCM bytes, one active stream per device, two
-globally, and 256 KiB client/server backpressure. Tickets are single-use;
-expired, replayed, revoked, malformed, and missing tickets fail without retained
-audio. Format changes, odd PCM, sequence errors, oversize streams, invalid
-finish metadata, slow consumers, and disconnect before finish delete the
-owner-only `.part` file and create no database turn.
-
-If connection setup, backpressure, streaming, or the final response fails, the
-phone posts its complete retained PCM to `POST /api/even/v1/turns` with the same
-idempotency key. A lost response after streaming commit therefore replays the
-existing turn through the ordinary hash/idempotency check, producing at most one
-turn and one WhatsApp dispatch. A mid-turn Tailscale outage retains that PCM and
-key for the companion retry action; it never silently switches to the LAN
-hostname.
+If streaming setup or final response fails, the client posts the complete PCM
+to `POST /api/even/v1/turns` with the same idempotency key and protocol header.
+That fallback also stops at `awaiting_confirmation`. Network failure retains the
+draft or PCM safely; it never sends, changes origin, or infers confirmation.
+Tokens, tickets, audio, drafts, prompts, hypotheses, and replies are forbidden
+from logs.

@@ -1,9 +1,14 @@
-import type { AppState } from './state';
+import {
+  conversationEntries,
+  type AppState,
+  type ConfirmationDecision,
+} from './state';
 
 export interface CompanionActions {
   onPair(code: string): Promise<void>;
   onRetry(): Promise<void>;
   onNewTurn(): Promise<void>;
+  onConfirm(decision: ConfirmationDecision): Promise<void>;
 }
 
 export interface CompanionUi {
@@ -14,152 +19,41 @@ const labels: Record<AppState['kind'], string> = {
   booting: 'Connecting',
   pairing: 'Pairing required',
   ready: 'Ready',
-  recording: 'Recording',
-  stopping: 'Captured · finalizing',
-  uploading: 'Sending',
+  recording: 'Listening',
+  stopping: 'Transcribing',
+  uploading: 'Transcribing',
   transcribing: 'Transcribing',
-  thinking: 'NanoClaw is thinking',
-  answer: 'Answer ready',
+  review: 'Review draft',
+  thinking: 'Thinking',
   error: 'Needs attention',
 };
 
 export function mountCompanionUi(actions: CompanionActions): CompanionUi {
   const root = document.querySelector<HTMLDivElement>('#app');
   if (!root) throw new Error('Companion root is missing');
-  root.innerHTML = `
-    <style>
-      :root {
-        color: #dce9e4;
-        background: #0b100f;
-        font-family: "Avenir Next", "Trebuchet MS", sans-serif;
-        font-synthesis: none;
-      }
-      * { box-sizing: border-box; }
-      body { margin: 0; min-width: 280px; min-height: 100vh; background: #0b100f; }
-      button, input { font: inherit; }
-      .shell {
-        min-height: 100vh;
-        display: grid;
-        grid-template-columns: 22px minmax(0, 1fr);
-        gap: 20px;
-        padding: clamp(22px, 7vw, 54px);
-        max-width: 720px;
-        margin: 0 auto;
-      }
-      .ray {
-        position: relative;
-        border-left: 1px solid #35453f;
-        margin-left: 10px;
-      }
-      .ray::before {
-        content: "";
-        position: absolute;
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        left: -5px;
-        top: 66px;
-        background: #8bd5c8;
-        box-shadow: 0 0 0 6px #17211e, 0 0 22px rgba(139, 213, 200, .42);
-        transition: top 220ms ease;
-      }
-      .ray[data-step="pairing"]::before { top: 66px; background: #ffc17a; }
-      .ray[data-step="ready"]::before, .ray[data-step="recording"]::before { top: 126px; }
-      .ray[data-step="stopping"]::before { top: 156px; }
-      .ray[data-step="uploading"]::before, .ray[data-step="transcribing"]::before { top: 186px; }
-      .ray[data-step="thinking"]::before { top: 246px; }
-      .ray[data-step="answer"]::before { top: 306px; background: #c9ffb1; }
-      .ray[data-step="error"]::before { background: #ff8f82; }
-      main { min-width: 0; }
-      .eyebrow {
-        margin: 0 0 30px;
-        color: #8bd5c8;
-        font: 700 11px/1.2 "Courier New", monospace;
-        letter-spacing: .16em;
-        text-transform: uppercase;
-      }
-      h1 {
-        margin: 0;
-        max-width: 12ch;
-        color: #f3f8f5;
-        font-size: clamp(34px, 9vw, 62px);
-        font-weight: 500;
-        line-height: .98;
-        letter-spacing: -.045em;
-      }
-      .instruction { color: #9cadA6; line-height: 1.55; margin: 20px 0 0; max-width: 42ch; }
-      .panel { border-top: 1px solid #35453f; margin-top: 38px; padding-top: 22px; }
-      .metric {
-        font: 700 13px/1.4 "Courier New", monospace;
-        color: #c9ffb1;
-        letter-spacing: .03em;
-      }
-      .answer {
-        white-space: pre-wrap;
-        color: #edf5f0;
-        line-height: 1.6;
-        margin: 16px 0;
-      }
-      .transcript { color: #84958e; font-size: 13px; margin-top: 18px; }
-      .history {
-        border-top: 1px solid #35453f;
-        margin-top: 42px;
-        padding-top: 22px;
-        max-height: 52vh;
-        overflow-y: auto;
-        overscroll-behavior: contain;
-      }
-      .history h2 {
-        margin: 0 0 18px;
-        color: #8bd5c8;
-        font: 700 11px/1.2 "Courier New", monospace;
-        letter-spacing: .14em;
-        text-transform: uppercase;
-      }
-      .turn { border-bottom: 1px solid #25332e; padding: 0 0 20px; margin: 0 0 20px; }
-      .turn:last-child { border-bottom: 0; margin-bottom: 0; }
-      .turn-number { color: #c9ffb1; font: 700 12px/1.4 "Courier New", monospace; }
-      .turn-answer { white-space: pre-wrap; color: #dce9e4; line-height: 1.55; margin: 10px 0 0; }
-      form { display: grid; gap: 12px; max-width: 360px; }
-      label { color: #9cada6; font-size: 13px; }
-      input {
-        width: 100%;
-        border: 1px solid #42544d;
-        border-radius: 3px;
-        background: #111916;
-        color: #f3f8f5;
-        padding: 14px 15px;
-        font: 700 24px/1 "Courier New", monospace;
-        letter-spacing: .22em;
-      }
-      input:focus-visible, button:focus-visible { outline: 2px solid #8bd5c8; outline-offset: 3px; }
-      button {
-        justify-self: start;
-        border: 0;
-        border-radius: 3px;
-        padding: 12px 17px;
-        color: #0b100f;
-        background: #c9ffb1;
-        cursor: pointer;
-        font-weight: 700;
-      }
-      button.secondary { color: #dce9e4; background: #25332e; }
-      button:disabled { opacity: .55; cursor: wait; }
-      .error { color: #ff9e92; line-height: 1.5; }
-      @media (prefers-reduced-motion: reduce) { .ray::before { transition: none; } }
-    </style>
-    <div class="shell">
-      <aside class="ray" aria-hidden="true"></aside>
-      <main>
-        <p class="eyebrow">NanoClaw / G2 voice link</p>
-        <section id="state" aria-live="polite"></section>
-      </main>
-    </div>
-  `;
-  const stateRoot = root.querySelector<HTMLElement>('#state')!;
-  const ray = root.querySelector<HTMLElement>('.ray')!;
+  root.innerHTML = `${styles}
+    <div class="lens">
+      <header id="connection" class="connection"></header>
+      <div class="ledger-wrap">
+        <div class="rail" aria-hidden="true"></div>
+        <section id="ledger" class="ledger" aria-label="Conversation feed"></section>
+        <button id="latest" class="latest" data-action="latest" hidden>Latest ↓</button>
+      </div>
+      <footer id="dock" class="dock" aria-live="polite"></footer>
+    </div>`;
 
-  stateRoot.addEventListener('submit', (event) => {
+  const connection = root.querySelector<HTMLElement>('#connection')!;
+  const ledger = root.querySelector<HTMLElement>('#ledger')!;
+  const dock = root.querySelector<HTMLElement>('#dock')!;
+  const latest = root.querySelector<HTMLButtonElement>('#latest')!;
+  let reviewingHistory = false;
+
+  ledger.addEventListener('scroll', () => {
+    reviewingHistory =
+      ledger.scrollHeight - ledger.scrollTop - ledger.clientHeight > 24;
+    latest.hidden = !reviewingHistory;
+  });
+  root.addEventListener('submit', (event) => {
     const form = event.target as HTMLFormElement;
     if (form.id !== 'pairForm') return;
     event.preventDefault();
@@ -173,81 +67,128 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
         button.disabled = false;
       });
   });
-  stateRoot.addEventListener('click', (event) => {
+  root.addEventListener('click', (event) => {
     const action = (event.target as HTMLElement).closest<HTMLButtonElement>(
       'button[data-action]',
     )?.dataset.action;
     if (action === 'retry') void actions.onRetry().catch(() => undefined);
     if (action === 'new') void actions.onNewTurn().catch(() => undefined);
+    if (action === 'send') {
+      void actions.onConfirm('send').catch(() => undefined);
+    }
+    if (action === 'discard') {
+      void actions.onConfirm('discard').catch(() => undefined);
+    }
+    if (action === 'latest') {
+      reviewingHistory = false;
+      ledger.scrollTop = ledger.scrollHeight;
+      latest.hidden = true;
+    }
   });
 
   return {
     render(state) {
-      ray.dataset.step = state.kind;
-      stateRoot.innerHTML = renderCompanionState(state);
+      const priorScrollTop = ledger.scrollTop;
+      connection.innerHTML = renderConnection(state);
+      ledger.innerHTML = renderLedger(state);
+      dock.innerHTML = renderDock(state);
+      if (reviewingHistory) {
+        ledger.scrollTop = priorScrollTop;
+        latest.hidden = false;
+      } else {
+        ledger.scrollTop = ledger.scrollHeight;
+        latest.hidden = true;
+      }
     },
   };
 }
 
 export function renderCompanionState(state: AppState): string {
-  return renderCurrentState(state) + renderSessionHistory(state);
+  return `${renderConnection(state)}${renderLedger(state)}${renderDock(state)}`;
 }
 
-function renderCurrentState(state: AppState): string {
-  const heading = `<h1>${labels[state.kind]}</h1>`;
+function renderConnection(state: AppState): string {
+  if (state.kind === 'pairing') {
+    return `<div>
+      <p class="brand">NanoClaw <span>/ G2</span></p>
+      <p class="connection-state">Pairing required</p>
+    </div>
+    <form id="pairForm" class="pair-form">
+      <label for="pairCode">Host pairing code</label>
+      <input id="pairCode" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required />
+      <button type="submit">Pair</button>
+      ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
+    </form>`;
+  }
+  return `<div>
+    <p class="brand">NanoClaw <span>/ G2</span></p>
+    <p class="connection-state"><i aria-hidden="true"></i> Private host connected</p>
+  </div>
+  <p class="phase">${escapeHtml(labels[state.kind])}</p>`;
+}
+
+function renderLedger(state: AppState): string {
+  const entries = conversationEntries(state);
+  if (entries.length === 0) {
+    return `<div class="empty">
+      <p>Conversation ledger</p>
+      <strong>${state.kind === 'pairing' ? 'Pair to begin.' : 'Tap your G2 to speak.'}</strong>
+    </div>`;
+  }
+  return entries
+    .map(
+      (entry) => `<article class="signal signal-${entry.speaker.toLowerCase()}">
+        <span class="signal-dot" aria-hidden="true"></span>
+        <p class="speaker">${entry.speaker}</p>
+        <p class="utterance">${escapeHtml(entry.text)}</p>
+      </article>`,
+    )
+    .join('');
+}
+
+function renderDock(state: AppState): string {
+  const status = `<div><p class="dock-label">Status</p><p class="dock-status">${escapeHtml(
+    statusText(state),
+  )}</p></div>`;
+  if (state.kind === 'review') {
+    return `${status}<div class="dock-actions">
+      <button data-action="send">Send</button>
+      <button class="secondary" data-action="discard">Try again</button>
+    </div>`;
+  }
+  if (state.kind === 'error') {
+    return `${status}<div class="dock-actions">${
+      state.retryable
+        ? '<button data-action="retry">Retry</button>'
+        : '<button class="secondary" data-action="new">Return</button>'
+    }</div>`;
+  }
+  return status;
+}
+
+function statusText(state: AppState): string {
   switch (state.kind) {
     case 'booting':
-      return `${heading}<p class="instruction">Opening the private Tailscale link to your NanoClaw host.</p>`;
+      return 'Opening the private Tailscale link…';
     case 'pairing':
-      return `${heading}
-        <p class="instruction">Run <code>npm run evenhub:pair</code> on the host, then enter its six-digit code.</p>
-        <div class="panel">
-          <form id="pairForm">
-            <label for="pairCode">One-time pairing code</label>
-            <input id="pairCode" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required />
-            <button type="submit">Pair this G2</button>
-          </form>
-          ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
-        </div>`;
+      return 'Run npm run evenhub:pair on the host.';
     case 'ready':
-      return `${heading}<p class="instruction">Tap either temple to record. Tap once more to send the turn.</p>`;
+      return 'Tap G2 to record.';
     case 'recording':
-      return `${heading}<p class="instruction">Speak naturally, then tap to send.</p><div class="panel metric">${(state.bytes / 32_000).toFixed(1)} seconds captured</div>${snapshotText(state) ? `<p class="transcript" aria-live="polite">${escapeHtml(snapshotText(state))}</p>` : ''}`;
+      return `Listening · ${(state.bytes / 32_000).toFixed(1)}s · tap G2 to stop`;
     case 'stopping':
-      return `${heading}<p class="instruction">The timer is frozen while local speech recognition finishes.</p>${snapshotText(state) ? `<p class="transcript">${escapeHtml(snapshotText(state))}</p>` : ''}`;
     case 'uploading':
-      return `${heading}<p class="instruction">Sending the retained recording through your private tailnet.</p>`;
     case 'transcribing':
-      return `${heading}<p class="instruction">Local speech recognition is reading the recording.</p>${state.transcript ? `<p class="transcript">${escapeHtml(state.transcript)}</p>` : ''}${state.notice ? `<p class="metric">${escapeHtml(state.notice)}</p>` : ''}`;
+      return state.kind === 'transcribing' && state.notice
+        ? state.notice
+        : 'Transcribing locally…';
+    case 'review':
+      return state.notice || 'Draft is waiting. Nothing has been sent.';
     case 'thinking':
-      return `${heading}<p class="instruction">The turn is now in the same context path as WhatsApp.</p>${state.transcript ? `<p class="transcript">${escapeHtml(state.transcript)}</p>` : ''}${state.notice ? `<p class="metric">${escapeHtml(state.notice)}</p>` : ''}`;
-    case 'answer':
-      return `${heading}<div class="panel"><div class="metric">Page ${state.page + 1} / ${state.pages.length}</div><p class="answer">${escapeHtml(state.pages[state.page])}</p><button class="secondary" data-action="new">Record another turn</button>${state.transcript ? `<p class="transcript">Heard: ${escapeHtml(state.transcript)}</p>` : ''}</div>`;
+      return state.notice || 'NanoClaw is thinking…';
     case 'error':
-      return `${heading}<p class="error">${escapeHtml(state.message)}</p><div class="panel">${state.retryable ? '<button data-action="retry">Try again</button>' : '<button class="secondary" data-action="new">Return to ready</button>'}</div>`;
+      return state.message;
   }
-}
-
-function snapshotText(
-  state: Extract<AppState, { kind: 'recording' | 'stopping' }>,
-): string {
-  return [state.finalText, state.interimText].filter(Boolean).join(' ').trim();
-}
-
-function renderSessionHistory(state: AppState): string {
-  if (state.session.turns.length === 0) return '';
-  return `<section class="history" aria-label="Session turns">
-    <h2>Session turns</h2>
-    ${state.session.turns
-      .map(
-        (turn, index) => `<article class="turn">
-          <div class="turn-number">Turn ${index + 1}</div>
-          ${turn.transcript ? `<p class="transcript">Heard: ${escapeHtml(turn.transcript)}</p>` : ''}
-          <p class="turn-answer">${escapeHtml(turn.pages.join('\n\n'))}</p>
-        </article>`,
-      )
-      .join('')}
-  </section>`;
 }
 
 function escapeHtml(value: string): string {
@@ -257,3 +198,50 @@ function escapeHtml(value: string): string {
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]!,
   );
 }
+
+const styles = `<style>
+  :root {
+    color: #e8eee9;
+    background: #080c0b;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-synthesis: none;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-width: 280px; min-height: 100vh; background: radial-gradient(circle at 70% -10%, #26342f 0, #111816 36%, #080c0b 72%); }
+  button, input { font: inherit; }
+  .lens { min-height: 100vh; max-width: 760px; margin: 0 auto; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+  .connection { min-height: 76px; padding: 18px clamp(20px, 5vw, 42px); border-bottom: 1px solid #33413b; display: flex; align-items: center; justify-content: space-between; gap: 20px; background: rgba(8, 12, 11, .72); backdrop-filter: blur(14px); }
+  .brand, .connection-state, .phase, .speaker, .utterance, .dock-label, .dock-status, .empty p, .empty strong { margin: 0; }
+  .brand { color: #f4f7f4; font-weight: 760; letter-spacing: -.02em; }
+  .brand span, .phase { color: #82938b; }
+  .connection-state, .phase { margin-top: 5px; font: 650 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em; text-transform: uppercase; }
+  .connection-state i { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #9ee8c7; box-shadow: 0 0 12px #74cfa7; }
+  .ledger-wrap { min-height: 0; position: relative; display: grid; grid-template-columns: 44px 1fr; padding: 0 clamp(20px, 5vw, 42px); }
+  .rail { border-right: 1px solid #34423c; }
+  .ledger { min-height: 220px; max-height: calc(100vh - 176px); overflow-y: auto; padding: 28px 0 72px 26px; scroll-behavior: smooth; overscroll-behavior: contain; }
+  .signal { position: relative; padding: 0 0 30px; }
+  .signal-dot { position: absolute; left: -31px; top: 4px; width: 9px; height: 9px; border: 2px solid #111816; border-radius: 50%; background: #7f948a; box-shadow: 0 0 0 1px #52645c; }
+  .signal-nanoclaw .signal-dot { background: #b6f29d; box-shadow: 0 0 16px rgba(182, 242, 157, .4); }
+  .signal-notice .signal-dot { background: #ff9a8d; }
+  .speaker { color: #8fd2bd; font: 750 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .11em; text-transform: uppercase; }
+  .utterance { margin-top: 8px; max-width: 54ch; color: #e1e9e4; font-size: clamp(16px, 4vw, 19px); line-height: 1.55; white-space: pre-wrap; }
+  .empty { padding: 46px 0 0 26px; color: #7f9088; }
+  .empty p { font: 700 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .1em; text-transform: uppercase; }
+  .empty strong { display: block; margin-top: 12px; color: #d8e2dc; font-size: 20px; font-weight: 520; }
+  .dock { position: sticky; bottom: 0; min-height: 100px; padding: 17px clamp(20px, 5vw, 42px) max(17px, env(safe-area-inset-bottom)); border-top: 1px solid #415048; display: flex; align-items: center; justify-content: space-between; gap: 20px; background: rgba(13, 19, 17, .94); backdrop-filter: blur(18px); }
+  .dock-label { color: #75877f; font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
+  .dock-status { margin-top: 5px; color: #edf3ef; line-height: 1.35; }
+  .dock-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+  button { border: 1px solid #b6f29d; border-radius: 999px; padding: 10px 17px; color: #08100b; background: #b6f29d; cursor: pointer; font-weight: 760; }
+  button.secondary { color: #dce7e0; border-color: #4d5d55; background: #1b2521; }
+  button:disabled { opacity: .55; cursor: wait; }
+  button:focus-visible, input:focus-visible { outline: 2px solid #a7f4da; outline-offset: 3px; }
+  .latest { position: absolute; right: clamp(28px, 7vw, 54px); bottom: 16px; padding: 7px 12px; border-color: #52645b; color: #dce7e0; background: #1b2521; font-size: 12px; }
+  .pair-form { display: grid; grid-template-columns: minmax(110px, 160px) auto; gap: 7px; align-items: end; }
+  .pair-form label { grid-column: 1 / -1; color: #8fa097; font-size: 11px; }
+  .pair-form input { min-width: 0; border: 1px solid #526159; border-radius: 5px; padding: 9px; color: #eff5f1; background: #111815; font: 750 18px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .15em; }
+  .pair-form button { border-radius: 5px; padding: 9px 13px; }
+  .error { grid-column: 1 / -1; margin: 0; color: #ff9e92; font-size: 12px; }
+  @media (max-width: 480px) { .connection { align-items: flex-start; } .pair-form { grid-template-columns: 1fr; } .pair-form label, .pair-form .error { grid-column: auto; } .dock { align-items: flex-start; } }
+  @media (prefers-reduced-motion: reduce) { .ledger { scroll-behavior: auto; } }
+</style>`;

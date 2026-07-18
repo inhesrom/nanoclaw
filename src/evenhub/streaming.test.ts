@@ -23,11 +23,13 @@ import type {
 const allStates = [
   'accepted',
   'transcribing',
+  'awaiting_confirmation',
   'dispatching',
   'queued',
   'running',
   'completed',
   'failed',
+  'discarded',
 ] as const;
 
 describe('EvenHub streaming protocol', () => {
@@ -76,6 +78,7 @@ describe('EvenHub streaming protocol', () => {
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
+        'X-EvenHub-Protocol-Version': '2',
       },
       body: JSON.stringify({ idempotencyKey }),
     });
@@ -103,14 +106,14 @@ describe('EvenHub streaming protocol', () => {
     socket.send(
       JSON.stringify({
         type: 'start',
-        version: 1,
+        version: 2,
         session: session.sessionId,
         ticket: session.ticket,
         format: { encoding: 's16le', sampleRate: 16_000, channels: 1 },
       }),
     );
     await expect(nextType(messages, 'ready')).resolves.toMatchObject({
-      version: 1,
+      version: 2,
     });
 
     provider.snapshot({ finalText: 'set a', interimText: 'timer' });
@@ -131,7 +134,7 @@ describe('EvenHub streaming protocol', () => {
     );
     const final = await nextType(messages, 'final');
     expect(final).toMatchObject({
-      state: 'dispatching',
+      state: 'awaiting_confirmation',
       transcript: 'set a timer',
     });
     expect(provider.audio).toEqual(pcm);
@@ -193,7 +196,7 @@ describe('EvenHub streaming protocol', () => {
     await opened(allowed);
     allowed.send(startMessage(session));
     await expect(nextType(messages, 'ready')).resolves.toMatchObject({
-      version: 1,
+      version: 2,
     });
     allowed.close();
     await closed(allowed);
@@ -269,13 +272,14 @@ describe('EvenHub streaming protocol', () => {
         'Content-Type': 'audio/L16;rate=16000;channels=1',
         'Idempotency-Key': session.idempotencyKey,
         'X-Audio-Duration-Ms': '250',
+        'X-EvenHub-Protocol-Version': '2',
       },
       body: pcm,
     });
     expect(replay.status).toBe(200);
     expect(replay.headers['Idempotency-Replayed']).toBe('true');
     expect(replay.body).toMatchObject({
-      state: 'dispatching',
+      state: 'awaiting_confirmation',
       transcript: 'set a timer',
     });
     expect(getEvenTurnsByStates(allStates)).toHaveLength(1);
@@ -420,7 +424,7 @@ class FakeStreamingProvider implements SttStreamingProvider {
 function startMessage(session: { sessionId: string; ticket: string }): string {
   return JSON.stringify({
     type: 'start',
-    version: 1,
+    version: 2,
     session: session.sessionId,
     ticket: session.ticket,
     format: { encoding: 's16le', sampleRate: 16_000, channels: 1 },

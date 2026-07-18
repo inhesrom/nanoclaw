@@ -73,9 +73,10 @@ describe('EvenHubWhatsAppBridge', () => {
       updated_at: timestamp,
     });
     transitionEvenTurnState(id, 'accepted', 'transcribing');
-    transitionEvenTurnState(id, 'transcribing', 'dispatching', {
+    transitionEvenTurnState(id, 'transcribing', 'awaiting_confirmation', {
       transcript: `transcript for ${id}`,
     });
+    transitionEvenTurnState(id, 'awaiting_confirmation', 'dispatching');
   }
 
   function target(

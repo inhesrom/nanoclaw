@@ -18,7 +18,7 @@ import { createUuidV7, isUuidV4 } from './uuid.js';
 import { WebSocket, WebSocketServer } from 'ws';
 
 export const EVEN_STREAM_PATH = '/api/even/v1/stt-stream';
-export const EVEN_STREAM_PROTOCOL_VERSION = 1;
+export const EVEN_STREAM_PROTOCOL_VERSION = 2;
 export const EVEN_STREAM_TICKET_TTL_MS = 60_000;
 export const EVEN_STREAM_AUTH_TIMEOUT_MS = 5_000;
 export const EVEN_STREAM_MAX_BUFFERED_BYTES = 256 * 1024;
@@ -44,7 +44,7 @@ export interface StreamingSessionTicket {
   sessionId: string;
   ticket: string;
   expiresAt: string;
-  protocolVersion: 1;
+  protocolVersion: 2;
   audio: {
     encoding: 's16le';
     sampleRate: 16000;
@@ -100,7 +100,7 @@ export class EvenStreamTicketStore {
       sessionId,
       ticket,
       expiresAt: new Date(expiresAt).toISOString(),
-      protocolVersion: 1,
+      protocolVersion: EVEN_STREAM_PROTOCOL_VERSION,
       audio: {
         encoding: 's16le',
         sampleRate: 16_000,
@@ -150,7 +150,7 @@ export interface EvenHubStreamingOptions {
 
 interface StartMessage {
   type: 'start';
-  version: 1;
+  version: 2;
   session: string;
   ticket: string;
   format: { encoding: 's16le'; sampleRate: 16000; channels: 1 };
@@ -279,7 +279,7 @@ export class EvenHubStreamingGateway {
         partPath = path.join(this.options.audioDir, `.${start.session}.part`);
         partFile = fs.openSync(partPath, 'wx', 0o600);
         stream = await this.options.stt.connect(queueSnapshot);
-        send({ type: 'ready', version: 1 });
+        send({ type: 'ready', version: EVEN_STREAM_PROTOCOL_VERSION });
         return;
       }
 
@@ -458,14 +458,14 @@ function isAllowedWebSocketOrigin(
 }
 
 type StreamServerMessage =
-  | { type: 'ready'; version: 1 }
+  | { type: 'ready'; version: 2 }
   | ({ type: 'snapshot' } & SttSnapshot)
   | ({ type: 'final' } & PublicEvenTurn);
 
 function validStart(message: Partial<StartMessage>): message is StartMessage {
   return (
     message.type === 'start' &&
-    message.version === 1 &&
+    message.version === EVEN_STREAM_PROTOCOL_VERSION &&
     typeof message.session === 'string' &&
     typeof message.ticket === 'string' &&
     message.format?.encoding === 's16le' &&

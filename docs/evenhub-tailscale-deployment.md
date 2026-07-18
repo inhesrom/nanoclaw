@@ -1,6 +1,6 @@
 # EvenHub private Tailscale deployment
 
-EvenHub 0.3.1 has one private application origin,
+EvenHub 0.4.0 has one private application origin,
 `https://<device>.<tailnet>.ts.net`. The concrete value is stored only in the
 owner's ignored build configuration and the installed backend environment; it
 must not be committed. Tailscale Serve terminates HTTPS on the Pi's tailnet
@@ -57,7 +57,7 @@ chmod 0600 .env.private
 npm test
 npm run pack:verify
 npm run pack:private
-sha256sum nanoclaw-evenhub-0.3.1.ehpk
+sha256sum nanoclaw-evenhub-0.4.0.ehpk
 ```
 
 The private packer requires mode `0600`, validates a canonical HTTPS `ts.net`
@@ -153,11 +153,14 @@ Required observations:
   suffix.
 
 Run short, representative, and automatic 30-second physical turns with
-Tailscale enabled on both Wi-Fi and cellular. Confirm partials,
-`Captured · finalizing`, final transcript, WhatsApp delivery, history, paging,
-and record-again. Then disconnect Tailscale mid-recording, reconnect, and retry;
-the retained PCM and idempotency key must produce at most one durable turn and
-one WhatsApp dispatch.
+Tailscale enabled on both Wi-Fi and cellular. Confirm live draft following,
+tap-to-stop, the complete review draft, four-line feed scrolling, `Send`, and
+`Try again`. Verify no WhatsApp prompt exists before `Send`, discard starts a
+replacement recording only after host acknowledgement, relaunch restores an
+unresolved draft, and completed history is session-only. Then disconnect
+Tailscale during recording and confirmation, reconnect, and retry; the retained
+PCM/idempotency key or draft must produce at most one turn and never infer a
+send decision.
 
 ## Rollback
 

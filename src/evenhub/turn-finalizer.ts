@@ -54,7 +54,6 @@ export interface TurnFinalizerOptions {
     ): void;
   };
   logger?: FinalizerLogger;
-  onDispatchReady?: () => void;
 }
 
 /** Shared exactly-once persistence used by streaming and POST fallback. */
@@ -112,6 +111,7 @@ export class EvenTurnFinalizer {
       audio_path: finalPath,
       audio_duration_ms: audio.durationMs,
       state: 'accepted',
+      confirmation_decision: null,
       transcript: null,
       whatsapp_message_id: null,
       answer: null,
@@ -173,11 +173,16 @@ export class EvenTurnFinalizer {
       this.logger.warn({ turn_id: turn.id }, 'even.capture_hook_failed');
     }
     if (
-      !transitionEvenTurnState(turn.id, 'transcribing', 'dispatching', {
-        transcript,
-      })
+      !transitionEvenTurnState(
+        turn.id,
+        'transcribing',
+        'awaiting_confirmation',
+        {
+          transcript,
+        },
+      )
     ) {
-      throw new Error('new streaming turn could not enter dispatching');
+      throw new Error('new streaming turn could not await confirmation');
     }
     try {
       fs.rmSync(turn.audio_path, { force: true });
@@ -190,12 +195,11 @@ export class EvenTurnFinalizer {
     this.logger.info(
       {
         turn_id: turn.id,
-        state: 'dispatching',
+        state: 'awaiting_confirmation',
         audio_duration_ms: turn.audio_duration_ms,
       },
       'stt.completed',
     );
-    this.options.onDispatchReady?.();
     return { turn: getEvenTurnById(turn.id)!, created: true };
   }
 
