@@ -9,7 +9,7 @@ const approved: EvenHubRuntimeConfig = {
   enabled: true,
   host: '127.0.0.1',
   port: 18791,
-  publicOrigin: 'https://nanoclaw.local',
+  publicOrigin: 'https://nanoclaw.example.ts.net',
   sttUrl: 'http://127.0.0.1:8178/v1/transcribe',
   maxAudioBytes: 960_000,
   pairingTtlMs: 300_000,
@@ -17,14 +17,14 @@ const approved: EvenHubRuntimeConfig = {
 };
 
 describe('EvenHub runtime configuration', () => {
-  it('accepts the reviewed private LAN configuration', () => {
+  it('accepts a canonical private tailnet origin', () => {
     expect(() => validateEvenHubRuntimeConfig(approved)).not.toThrow();
   });
 
   it.each([
     ['host', '0.0.0.0'],
     ['port', 8080],
-    ['publicOrigin', 'http://nanoclaw.local'],
+    ['publicOrigin', 'http://nanoclaw.example.ts.net'],
     ['sttUrl', 'http://192.168.1.20:8178/v1/transcribe'],
     ['maxAudioBytes', 2_000_000],
     ['pairingTtlMs', 600_000],
@@ -33,6 +33,17 @@ describe('EvenHub runtime configuration', () => {
     expect(() =>
       validateEvenHubRuntimeConfig({ ...approved, [name]: value }),
     ).toThrow(`Invalid EvenHub configuration: ${name}`);
+  });
+
+  it.each([
+    'https://nanoclaw.example.ts.net/',
+    'https://nanoclaw.example.ts.net:8443',
+    'https://example.ts.net',
+    'https://nanoclaw.local',
+  ])('rejects unsafe public origin %s', (publicOrigin) => {
+    expect(() =>
+      validateEvenHubRuntimeConfig({ ...approved, publicOrigin }),
+    ).toThrow('Invalid EvenHub configuration: publicOrigin');
   });
 
   it('does not constrain configuration while the slice is disabled', () => {

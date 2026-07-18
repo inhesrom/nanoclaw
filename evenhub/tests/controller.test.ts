@@ -35,6 +35,7 @@ const completedTurn: ServerTurn = {
 
 function api(overrides: Partial<EvenHubApiPort> = {}): EvenHubApiPort {
   return {
+    async checkReady(): Promise<void> {},
     async pair(): Promise<PairResult> {
       return { deviceId: 'device-1', token: 'token' };
     },
@@ -49,6 +50,43 @@ function api(overrides: Partial<EvenHubApiPort> = {}): EvenHubApiPort {
 }
 
 describe('TurnController', () => {
+  it('blocks recording until Tailscale readiness succeeds on retry', async () => {
+    const storage = new MemoryStorage(new Map([[STORAGE_KEYS.token, 'token']]));
+    let connected = false;
+    const checkReady = vi.fn(async () => {
+      if (!connected) {
+        throw new EvenHubApiError(
+          0,
+          'tailscale_unavailable',
+          'Connect Tailscale and retry.',
+          true,
+        );
+      }
+    });
+    const controller = new TurnController({
+      api: api({ checkReady }),
+      storage,
+      paginateAnswer: () => [],
+      onState: () => undefined,
+    });
+
+    await controller.boot();
+    expect(controller.state).toMatchObject({
+      kind: 'error',
+      message: 'Connect Tailscale and retry.',
+      retryable: true,
+    });
+    controller.startRecording();
+    expect(controller.state.kind).toBe('error');
+
+    connected = true;
+    await controller.retry();
+
+    expect(checkReady).toHaveBeenCalledTimes(2);
+    expect(controller.state.kind).toBe('ready');
+    expect(storage.values.get(STORAGE_KEYS.token)).toBe('token');
+  });
+
   it('resumes polling after reload and clears the durable active turn', async () => {
     const storage = new MemoryStorage(
       new Map([
@@ -147,6 +185,58 @@ describe('TurnController', () => {
     expect(pushed).toEqual([new Uint8Array([1, 2, 3, 4])]);
     expect(finish).toHaveBeenCalledWith(pcm, 250);
     expect(submitTurn).toHaveBeenCalledWith('token', pcm, 250, 'hybrid-key');
+    expect(controller.state.kind).toBe('answer');
+  });
+
+  it('retains complete PCM and one key across a mid-turn Tailscale outage', async () => {
+    const storage = new MemoryStorage(new Map([[STORAGE_KEYS.token, 'token']]));
+    const keys: string[] = [];
+    let attempts = 0;
+    const controller = new TurnController({
+      api: api({
+        startLiveTurn: () => ({
+          push: () => undefined,
+          finish: async () => {
+            throw new Error('stream disconnected');
+          },
+          abort: () => undefined,
+        }),
+        async submitTurn(_token, _pcm, _durationMs, key) {
+          keys.push(key);
+          attempts += 1;
+          if (attempts <= 4) {
+            throw new EvenHubApiError(
+              0,
+              'tailscale_unavailable',
+              'Connect Tailscale and retry.',
+              true,
+            );
+          }
+          return completedTurn;
+        },
+      }),
+      storage,
+      paginateAnswer: () => ['answer'],
+      onState: () => undefined,
+      delay: async () => undefined,
+      createIdempotencyKey: () => 'outage-key',
+    });
+    const pcm = new Uint8Array(8_000);
+    await controller.boot();
+    controller.startRecording();
+    controller.recordingStopped();
+
+    await controller.submit(pcm, 250);
+    expect(controller.state).toMatchObject({
+      kind: 'error',
+      message: 'Connect Tailscale and retry.',
+      retryable: true,
+    });
+    expect(keys).toEqual(new Array(4).fill('outage-key'));
+
+    await controller.retry();
+
+    expect(keys).toEqual(new Array(5).fill('outage-key'));
     expect(controller.state.kind).toBe('answer');
   });
 

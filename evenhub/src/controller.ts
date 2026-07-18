@@ -34,6 +34,8 @@ export class TurnController {
   private pendingUpload?: PendingUpload;
   private liveTurn?: LiveTurn;
   private recordingIdempotencyKey?: string;
+  private restoredState?: { hasToken: boolean; activeTurn?: ActiveTurn };
+  private readinessBlocked = false;
   private generation = 0;
 
   constructor(private readonly options: TurnControllerOptions) {
@@ -55,8 +57,8 @@ export class TurnController {
       activeTurnId && activeIdempotencyKey
         ? { id: activeTurnId, idempotencyKey: activeIdempotencyKey }
         : undefined;
-    this.dispatch({ type: 'RESTORED', hasToken: Boolean(token), activeTurn });
-    if (this.token && activeTurn) void this.poll(activeTurn);
+    this.restoredState = { hasToken: Boolean(token), activeTurn };
+    await this.restoreWhenReady();
   }
 
   async pair(code: string, deviceName = 'Even G2'): Promise<void> {
@@ -158,6 +160,10 @@ export class TurnController {
   async retry(): Promise<void> {
     if (this.pendingUpload) {
       await this.uploadPending();
+      return;
+    }
+    if (this.readinessBlocked) {
+      await this.restoreWhenReady();
       return;
     }
     if (this.stateValue.kind === 'error' && this.stateValue.activeTurn) {
@@ -365,6 +371,26 @@ export class TurnController {
       retryable,
       activeTurn,
     });
+  }
+
+  private async restoreWhenReady(): Promise<void> {
+    const restored = this.restoredState;
+    if (!restored) return;
+    try {
+      await this.options.api.checkReady();
+    } catch (error) {
+      this.readinessBlocked = true;
+      this.dispatch({
+        type: 'FAILED',
+        message: errorMessage(error),
+        retryable: true,
+        activeTurn: restored.activeTurn,
+      });
+      return;
+    }
+    this.readinessBlocked = false;
+    this.dispatch({ type: 'RESTORED', ...restored });
+    if (this.token && restored.activeTurn) void this.poll(restored.activeTurn);
   }
 
   private async clearActiveTurn(): Promise<void> {

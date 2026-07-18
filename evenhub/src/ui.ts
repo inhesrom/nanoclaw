@@ -197,7 +197,7 @@ function renderCurrentState(state: AppState): string {
   const heading = `<h1>${labels[state.kind]}</h1>`;
   switch (state.kind) {
     case 'booting':
-      return `${heading}<p class="instruction">Opening the private link to your NanoClaw host.</p>`;
+      return `${heading}<p class="instruction">Opening the private Tailscale link to your NanoClaw host.</p>`;
     case 'pairing':
       return `${heading}
         <p class="instruction">Run <code>npm run evenhub:pair</code> on the host, then enter its six-digit code.</p>
@@ -216,7 +216,7 @@ function renderCurrentState(state: AppState): string {
     case 'stopping':
       return `${heading}<p class="instruction">The timer is frozen while local speech recognition finishes.</p>${snapshotText(state) ? `<p class="transcript">${escapeHtml(snapshotText(state))}</p>` : ''}`;
     case 'uploading':
-      return `${heading}<p class="instruction">Securing the recorded audio on your local host.</p>`;
+      return `${heading}<p class="instruction">Sending the retained recording through your private tailnet.</p>`;
     case 'transcribing':
       return `${heading}<p class="instruction">Local speech recognition is reading the recording.</p>${state.transcript ? `<p class="transcript">${escapeHtml(state.transcript)}</p>` : ''}${state.notice ? `<p class="metric">${escapeHtml(state.notice)}</p>` : ''}`;
     case 'thinking':

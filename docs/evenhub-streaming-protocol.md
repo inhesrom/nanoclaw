@@ -7,9 +7,15 @@ creates a 60-second ticket with bearer-authenticated
 expiry, protocol version, and the fixed audio limits. Only the SHA-256 of the
 ticket is held in memory.
 
-The companion then opens `wss://nanoclaw.local/api/even/v1/stt-stream`. The URL
-contains no credential. The WebSocket Origin must be exactly
-`https://nanoclaw.local` or the installed EvenHub WebView's observed,
+Version 0.3.0 first probes
+`https://<device>.<tailnet>.ts.net/api/even/v1/readyz`; a network failure keeps
+recording disabled and shows `Connect Tailscale and retry.` The client has no
+`nanoclaw.local` fallback.
+
+The companion then opens
+`wss://<device>.<tailnet>.ts.net/api/even/v1/stt-stream`. The URL contains no
+credential. The WebSocket Origin must be exactly
+the private origin compiled into the package or the installed EvenHub WebView's observed,
 per-launch `http://127.0.0.1:<ephemeral-port>` origin. The loopback form accepts
 only canonical numeric ports 49152–65535; other hosts, schemes, ports, paths,
 missing origins, and lookalikes are rejected. The first message within five
@@ -79,4 +85,6 @@ If connection setup, backpressure, streaming, or the final response fails, the
 phone posts its complete retained PCM to `POST /api/even/v1/turns` with the same
 idempotency key. A lost response after streaming commit therefore replays the
 existing turn through the ordinary hash/idempotency check, producing at most one
-turn and one WhatsApp dispatch.
+turn and one WhatsApp dispatch. A mid-turn Tailscale outage retains that PCM and
+key for the companion retry action; it never silently switches to the LAN
+hostname.

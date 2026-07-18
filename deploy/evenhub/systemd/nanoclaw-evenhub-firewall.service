@@ -1,6 +1,6 @@
 [Unit]
 Description=NanoClaw EvenHub LAN firewall boundary
-Before=caddy.service
+Before=caddy.service nanoclaw-tailscale-serve.service
 
 [Service]
 Type=oneshot

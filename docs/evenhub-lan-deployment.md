@@ -1,11 +1,14 @@
-# EvenHub private LAN deployment
+# EvenHub retained private LAN deployment
 
-This runbook installs the hybrid streaming G2 slice on one Raspberry Pi 5. The
+This runbook retains the original LAN diagnostic and rollback boundary on one
+Raspberry Pi 5. EvenHub 0.3.0 uses the
+[Tailscale deployment](evenhub-tailscale-deployment.md) as its sole application
+route; it never falls back to this hostname. The
 tracked files under `deploy/evenhub/` are inert templates; repository tests do
 not mutate systemd, Caddy, Avahi, nftables, the hostname, or a live NanoClaw
 installation.
 
-The production route is fixed:
+The retained diagnostic route is fixed:
 
 ```text
 G2 companion → wss://nanoclaw.local/api/even/v1/stt-stream
@@ -14,9 +17,8 @@ G2 companion → wss://nanoclaw.local/api/even/v1/stt-stream
              → HTTPS whole-PCM POST on any streaming failure
 ```
 
-The fallback is the existing exactly-once local turn endpoint. There is no
-HTTP, direct-IP, WAN, cellular, Tailscale, native phone helper, or cloud
-inference path. Caddy exposes only `/api/even/*`, disables automatic HTTP
+The endpoint is not an application fallback. There is no HTTP, direct-IP, WAN,
+native phone helper, or cloud inference path. Caddy exposes only `/api/even/*`, disables automatic HTTP
 redirects and HTTP/3, and forwards WebSocket upgrades on the same restricted
 route. TCP 80 and UDP 443 must not listen.
 
@@ -50,10 +52,13 @@ npm run typecheck
 npm test
 cd evenhub
 npm ci
+cp .env.private.example .env.private
+chmod 0600 .env.private
+# Edit .env.private with the private canonical HTTPS ts.net origin.
 npm test
 npm run pack:verify
 npm run pack:private
-sha256sum nanoclaw-evenhub-0.2.1.ehpk
+sha256sum nanoclaw-evenhub-0.3.0.ehpk
 ```
 
 `pack:verify` builds two packages in separate temporary paths and fails unless
@@ -147,15 +152,16 @@ the tracked pending profile unchanged and do not create the evidence commit.
 
 Install the selected profile and these assets at the exact locations:
 
-| Repository asset                                           | Installed path                                          |
-| ---------------------------------------------------------- | ------------------------------------------------------- |
-| `deploy/evenhub/config/evenhub.env`                        | `/etc/nanoclaw/evenhub.env`                             |
-| `deploy/evenhub/Caddyfile`                                 | `/etc/caddy/Caddyfile`                                  |
-| `deploy/evenhub/avahi/nanoclaw.service`                    | `/etc/avahi/services/nanoclaw.service`                  |
-| `deploy/evenhub/systemd/nanoclaw-moonshine.service`        | `/etc/systemd/system/nanoclaw-moonshine.service`        |
-| `deploy/evenhub/systemd/nanoclaw-evenhub-firewall.service` | `/etc/systemd/system/nanoclaw-evenhub-firewall.service` |
-| `deploy/evenhub/systemd/nanoclaw.service.d/evenhub.conf`   | `/etc/systemd/system/nanoclaw.service.d/evenhub.conf`   |
-| `deploy/evenhub/systemd/caddy.service.d/evenhub.conf`      | `/etc/systemd/system/caddy.service.d/evenhub.conf`      |
+| Repository asset                                           | Installed path                                                |
+| ---------------------------------------------------------- | ------------------------------------------------------------- |
+| `deploy/evenhub/config/evenhub.env.template`               | `/etc/nanoclaw/evenhub.env` after private origin substitution |
+| `deploy/evenhub/Caddyfile`                                 | `/etc/caddy/Caddyfile`                                        |
+| `deploy/evenhub/avahi/nanoclaw.service`                    | `/etc/avahi/services/nanoclaw.service`                        |
+| `deploy/evenhub/systemd/nanoclaw-moonshine.service`        | `/etc/systemd/system/nanoclaw-moonshine.service`              |
+| `deploy/evenhub/systemd/nanoclaw-evenhub-firewall.service` | `/etc/systemd/system/nanoclaw-evenhub-firewall.service`       |
+| `deploy/evenhub/systemd/nanoclaw.service.d/evenhub.conf`   | `/etc/systemd/system/nanoclaw.service.d/evenhub.conf`         |
+| `deploy/evenhub/systemd/caddy.service.d/evenhub.conf`      | `/etc/systemd/system/caddy.service.d/evenhub.conf`            |
+| `deploy/evenhub/systemd/nanoclaw-tailscale-serve.service`  | `/etc/systemd/system/nanoclaw-tailscale-serve.service`        |
 
 Copy `deploy/evenhub/config/evenhub-caddy.env.template`, replace its
 documentation address with the fixed Pi LAN address, and install it at
@@ -171,12 +177,15 @@ sudo nft -c -f /etc/nftables.d/nanoclaw-evenhub.nft
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemd-analyze verify \
   /etc/systemd/system/nanoclaw-moonshine.service \
-  /etc/systemd/system/nanoclaw-evenhub-firewall.service
+  /etc/systemd/system/nanoclaw-evenhub-firewall.service \
+  /etc/systemd/system/nanoclaw-tailscale-serve.service
 sudo systemctl daemon-reload
 ```
 
-The firewall accepts TCP 443 only from the approved IPv4 LAN subnet and denies
-new forwarding from that LAN while preserving established replies. The
+The firewall accepts TCP 443 from the approved IPv4 LAN subnet and Tailscale
+IPv4/IPv6 ingress on `tailscale0`, then denies other port 443 traffic. It also
+denies direct non-loopback access to 8178 and 18791 and denies new forwarding
+from the LAN while preserving established replies. The
 Moonshine unit uses the dedicated `nanoclaw-stt` user, loopback-only networking,
 read-only model/runtime/profile paths, private temporary storage, no privilege
 escalation, restart-on-failure, and the measured memory ceiling. NanoClaw

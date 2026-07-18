@@ -43,7 +43,7 @@ describe('EvenHub streaming protocol', () => {
       host: '127.0.0.1',
       port: 0,
       audioDir,
-      publicOrigin: 'https://nanoclaw.local',
+      publicOrigin: 'https://nanoclaw.example.ts.net',
       streamingStt: provider,
     });
     await server.start();
@@ -86,7 +86,7 @@ describe('EvenHub streaming protocol', () => {
     };
   }
 
-  function connect(origin = 'https://nanoclaw.local'): WebSocket {
+  function connect(origin = 'https://nanoclaw.example.ts.net'): WebSocket {
     const address = server.address();
     return new WebSocket(
       `ws://${address.host}:${address.port}/api/even/v1/stt-stream`,
@@ -199,6 +199,7 @@ describe('EvenHub streaming protocol', () => {
     await closed(allowed);
 
     for (const origin of [
+      'https://nanoclaw.local',
       'http://localhost:60855',
       'http://127.0.0.2:60855',
       'https://127.0.0.1:60855',

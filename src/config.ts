@@ -59,9 +59,7 @@ export const EVENHUB_PORT = parseInt(
   10,
 );
 export const EVENHUB_PUBLIC_ORIGIN =
-  process.env.EVENHUB_PUBLIC_ORIGIN ||
-  envConfig.EVENHUB_PUBLIC_ORIGIN ||
-  'https://nanoclaw.local';
+  process.env.EVENHUB_PUBLIC_ORIGIN || envConfig.EVENHUB_PUBLIC_ORIGIN || '';
 // Fixed production boundary. Model/runtime selection lives in the tracked STT
 // profile consumed by the loopback service, not in NanoClaw's environment.
 export const EVENHUB_STT_URL = 'http://127.0.0.1:8178/v1/transcribe';
@@ -106,21 +104,44 @@ export const EVENHUB_RUNTIME_CONFIG: EvenHubRuntimeConfig = {
   turnRetentionMs: EVENHUB_TURN_RETENTION_MS,
 };
 
-const APPROVED_EVENHUB_CONFIG: Omit<EvenHubRuntimeConfig, 'enabled'> = {
+const APPROVED_EVENHUB_CONFIG: Omit<
+  EvenHubRuntimeConfig,
+  'enabled' | 'publicOrigin'
+> = {
   host: '127.0.0.1',
   port: 18791,
-  publicOrigin: 'https://nanoclaw.local',
   sttUrl: 'http://127.0.0.1:8178/v1/transcribe',
   maxAudioBytes: 960_000,
   pairingTtlMs: 300_000,
   turnRetentionMs: 604_800_000,
 };
 
-/** Fail closed when the private LAN slice drifts from its reviewed boundary. */
+/** Fail closed when the private EvenHub boundary drifts from its reviewed shape. */
 export function validateEvenHubRuntimeConfig(
   config: EvenHubRuntimeConfig = EVENHUB_RUNTIME_CONFIG,
 ): void {
   if (!config.enabled) return;
+
+  let publicUrl: URL;
+  try {
+    publicUrl = new URL(config.publicOrigin);
+  } catch (error) {
+    throw new Error(
+      'Invalid EvenHub configuration: publicOrigin must be a canonical HTTPS ts.net origin',
+      { cause: error },
+    );
+  }
+  if (
+    publicUrl.protocol !== 'https:' ||
+    publicUrl.port !== '' ||
+    publicUrl.origin !== config.publicOrigin ||
+    !publicUrl.hostname.endsWith('.ts.net') ||
+    publicUrl.hostname.split('.').length < 4
+  ) {
+    throw new Error(
+      'Invalid EvenHub configuration: publicOrigin must be a canonical HTTPS ts.net origin',
+    );
+  }
 
   for (const [name, approved] of Object.entries(APPROVED_EVENHUB_CONFIG)) {
     const actual = config[name as keyof typeof APPROVED_EVENHUB_CONFIG];

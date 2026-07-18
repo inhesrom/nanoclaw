@@ -15,12 +15,12 @@ const read = (...parts: string[]) =>
   fs.readFileSync(path.join(deploy, ...parts), 'utf8');
 
 describe('EvenHub deployment assets', () => {
-  it('pins the reviewed runtime environment exactly', () => {
-    expect(read('config', 'evenhub.env').trim().split('\n')).toEqual([
+  it('tracks a fail-closed runtime environment template', () => {
+    expect(read('config', 'evenhub.env.template').trim().split('\n')).toEqual([
       'EVENHUB_ENABLED=true',
       'EVENHUB_HOST=127.0.0.1',
       'EVENHUB_PORT=18791',
-      'EVENHUB_PUBLIC_ORIGIN=https://nanoclaw.local',
+      'EVENHUB_PUBLIC_ORIGIN=REPLACE_WITH_TAILSCALE_HTTPS_ORIGIN',
       'EVENHUB_MAX_AUDIO_BYTES=960000',
       'EVENHUB_PAIRING_TTL_MS=300000',
       'EVENHUB_TURN_RETENTION_MS=604800000',
@@ -58,10 +58,23 @@ describe('EvenHub deployment assets', () => {
     expect(firewall).toContain(
       'iifname $lan_interface ip saddr $lan_subnet tcp dport 443 accept',
     );
+    expect(firewall).toContain(
+      'iifname "lo" tcp dport { 443, 8178, 18791 } accept',
+    );
+    expect(firewall).toContain(
+      'iifname "tailscale0" ip saddr 100.64.0.0/10 tcp dport 443 accept',
+    );
+    expect(firewall).toContain(
+      'iifname "tailscale0" ip6 saddr fd7a:115c:a1e0::/48 tcp dport 443 accept',
+    );
     expect(firewall.match(/tcp dport 443 drop/g)).toHaveLength(1);
-    expect(firewall.indexOf('tcp dport 443 accept')).toBeLessThan(
+    expect(firewall.indexOf('tailscale0')).toBeLessThan(
       firewall.indexOf('tcp dport 443 drop'),
     );
+    expect(firewall.indexOf('iifname "lo"')).toBeLessThan(
+      firewall.indexOf('tcp dport 443 drop'),
+    );
+    expect(firewall).toContain('tcp dport { 8178, 18791 } drop');
     expect(firewall).toMatch(
       /chain forward[\s\S]*ct state established,related accept/,
     );
@@ -113,6 +126,39 @@ describe('EvenHub deployment assets', () => {
     );
   });
 
+  it('configures persistent tailnet-only HTTPS Serve after every dependency', () => {
+    const unit = read('systemd', 'nanoclaw-tailscale-serve.service');
+    expect(unit).toContain(
+      'Requires=tailscaled.service nanoclaw.service nanoclaw-moonshine.service nanoclaw-evenhub-firewall.service',
+    );
+    expect(unit).toContain(
+      'After=network-online.target tailscaled.service nanoclaw.service nanoclaw-moonshine.service nanoclaw-evenhub-firewall.service',
+    );
+    expect(unit).toContain(
+      'ExecStart=/usr/bin/tailscale serve --bg --https=443 http://127.0.0.1:18791',
+    );
+    expect(unit).toContain(
+      'ExecStop=-/usr/bin/tailscale serve --https=443 off',
+    );
+    expect(unit).toContain('RestrictAddressFamilies=AF_UNIX');
+    expect(unit).not.toContain('funnel');
+    expect(unit).not.toContain('0.0.0.0');
+    expect(read('systemd', 'nanoclaw-evenhub-firewall.service')).toContain(
+      'Before=caddy.service nanoclaw-tailscale-serve.service',
+    );
+  });
+
+  it('captures private pre-Tailscale state without credential material', () => {
+    const snapshot = read('snapshot-before-tailscale.sh');
+    expect(snapshot).toContain('umask 077');
+    expect(snapshot).toContain('tailscale status --json');
+    expect(snapshot).toContain('tailscale serve status --json');
+    expect(snapshot).toContain('tailscale funnel status --json');
+    expect(snapshot).toContain('nft list ruleset');
+    expect(snapshot).not.toContain('tailscale debug prefs');
+    expect(snapshot).not.toContain('journalctl');
+  });
+
   it('records the same pinned Whisper checksums as the verifier', () => {
     const checksums = read('WHISPER_CHECKSUMS');
     expect(WHISPER_CPP_VERSION).toBe('v1.9.1');
@@ -120,7 +166,7 @@ describe('EvenHub deployment assets', () => {
     expect(checksums).toContain(WHISPER_BASE_EN_SHA1);
   });
 
-  it('pins the private plugin toolchain, origin, and least permissions', () => {
+  it('pins the private plugin toolchain, origin template, and least permissions', () => {
     const packageJson = JSON.parse(
       fs.readFileSync(path.join(root, 'evenhub', 'package.json'), 'utf8'),
     ) as {
@@ -130,14 +176,14 @@ describe('EvenHub deployment assets', () => {
       devDependencies: Record<string, string>;
     };
     const manifest = JSON.parse(
-      fs.readFileSync(path.join(root, 'evenhub', 'app.json'), 'utf8'),
+      fs.readFileSync(path.join(root, 'evenhub', 'app.template.json'), 'utf8'),
     ) as {
       package_id: string;
       version: string;
       permissions: Array<{ name: string; whitelist?: string[] }>;
     };
     expect(packageJson.private).toBe(true);
-    expect(packageJson.version).toBe('0.2.1');
+    expect(packageJson.version).toBe('0.3.0');
     expect(packageJson.dependencies).toEqual({
       '@evenrealities/even_hub_sdk': '0.0.12',
       '@evenrealities/pretext': '0.1.4',
@@ -156,17 +202,29 @@ describe('EvenHub deployment assets', () => {
       'network',
     ]);
     expect(manifest.permissions[1].whitelist).toEqual([
-      'https://nanoclaw.local',
-      'wss://nanoclaw.local',
+      'https://nanoclaw.example.ts.net',
+      'wss://nanoclaw.example.ts.net',
     ]);
     expect(
       fs
         .readFileSync(path.join(root, 'evenhub', '.env.production'), 'utf8')
         .trim(),
-    ).toBe('VITE_EVENHUB_ORIGIN=https://nanoclaw.local');
+    ).toBe('VITE_EVENHUB_ORIGIN=https://nanoclaw.example.ts.net');
     expect(
       fs.readFileSync(path.join(root, 'evenhub', 'vite.config.ts'), 'utf8'),
-    ).toContain('configuredOrigin !== APPROVED_ORIGIN');
+    ).toContain('requireTailnetOrigin');
+    expect(
+      fs.readFileSync(path.join(root, 'evenhub', 'vite.config.ts'), 'utf8'),
+    ).toContain("loadEnv('private'");
+    expect(fs.readFileSync(path.join(root, '.gitignore'), 'utf8')).toContain(
+      'evenhub/.env.private',
+    );
+    expect(
+      fs.readFileSync(
+        path.join(root, 'evenhub', 'scripts', 'private-package.mjs'),
+        'utf8',
+      ),
+    ).toContain("url.hostname.endsWith('.ts.net')");
   });
 
   it('pins the private Moonshine runtime and leaves selection evidence pending', () => {

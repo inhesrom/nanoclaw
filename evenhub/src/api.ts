@@ -1,5 +1,7 @@
 import type { ServerTurn } from './state';
 
+export const TAILSCALE_UNAVAILABLE_MESSAGE = 'Connect Tailscale and retry.';
+
 export class EvenHubApiError extends Error {
   constructor(
     readonly status: number,
@@ -42,6 +44,7 @@ export interface LiveTurn {
 }
 
 export interface EvenHubApiPort {
+  checkReady(): Promise<void>;
   pair(code: string, deviceName: string): Promise<PairResult>;
   submitTurn(
     token: string,
@@ -63,6 +66,19 @@ interface ErrorEnvelope {
 
 export class EvenHubApi implements EvenHubApiPort {
   constructor(private readonly origin: string) {}
+
+  async checkReady(): Promise<void> {
+    const controller = new AbortController();
+    const timeout = globalThis.setTimeout(() => controller.abort(), 5_000);
+    try {
+      await this.request('/api/even/v1/readyz', {
+        method: 'GET',
+        signal: controller.signal,
+      });
+    } finally {
+      globalThis.clearTimeout(timeout);
+    }
+  }
 
   pair(code: string, deviceName: string): Promise<PairResult> {
     return this.request<PairResult>('/api/even/v1/pair', {
@@ -125,7 +141,17 @@ export class EvenHubApi implements EvenHubApiPort {
   }
 
   private async request<T>(pathname: string, init: RequestInit): Promise<T> {
-    const response = await fetch(new URL(pathname, this.origin), init);
+    let response: Response;
+    try {
+      response = await fetch(new URL(pathname, this.origin), init);
+    } catch {
+      throw new EvenHubApiError(
+        0,
+        'tailscale_unavailable',
+        TAILSCALE_UNAVAILABLE_MESSAGE,
+        true,
+      );
+    }
     const body = (await response.json().catch(() => ({}))) as T & ErrorEnvelope;
     if (!response.ok) {
       throw new EvenHubApiError(

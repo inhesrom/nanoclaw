@@ -10,8 +10,12 @@ table inet nanoclaw_evenhub {
   chain input {
     type filter hook input priority -10; policy accept;
 
+    iifname "lo" tcp dport { 443, 8178, 18791 } accept
     iifname $lan_interface ip saddr $lan_subnet tcp dport 443 accept
+    iifname "tailscale0" ip saddr 100.64.0.0/10 tcp dport 443 accept
+    iifname "tailscale0" ip6 saddr fd7a:115c:a1e0::/48 tcp dport 443 accept
     tcp dport 443 drop
+    tcp dport { 8178, 18791 } drop
   }
 
   chain forward {

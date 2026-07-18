@@ -18,3 +18,4 @@ The files in this directory are original design documents and developer referenc
 | [evenhub-local-whisper.md](evenhub-local-whisper.md)                     | Historical EvenHub Whisper rollback snapshot                              |
 | [evenhub-turn-lifecycle.md](evenhub-turn-lifecycle.md)                   | Private EvenHub WhatsApp correlation reference                            |
 | [evenhub-lan-deployment.md](evenhub-lan-deployment.md)                   | Private EvenHub LAN deployment and rollback                               |
+| [evenhub-tailscale-deployment.md](evenhub-tailscale-deployment.md)       | Primary tailnet-only EvenHub 0.3.0 deployment                             |

@@ -1,23 +1,30 @@
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import {
+  buildPrivateClient,
+  packPrivateManifest,
+  readPrivateOrigin,
+  renderPrivateManifest,
+} from './private-package.mjs';
+
 const workspace = mkdtempSync(path.join(tmpdir(), 'nanoclaw-evenhub-pack-'));
-const cli = path.resolve('node_modules/.bin/evenhub');
 
 function digest(filePath) {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
 try {
+  const origin = readPrivateOrigin();
+  const manifest = path.join(workspace, 'app.json');
   const first = path.join(workspace, 'first.ehpk');
   const second = path.join(workspace, 'second.ehpk');
+  renderPrivateManifest(origin, manifest);
+  buildPrivateClient(origin);
   for (const output of [first, second]) {
-    execFileSync(cli, ['pack', '-o', output, 'app.json', 'dist'], {
-      stdio: 'inherit',
-    });
+    packPrivateManifest(manifest, output);
   }
 
   const firstDigest = digest(first);

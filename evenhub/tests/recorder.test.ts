@@ -31,6 +31,7 @@ describe('G2Recorder', () => {
     );
     const controller = new TurnController({
       api: {
+        checkReady: vi.fn(async () => undefined),
         pair: vi.fn(),
         submitTurn: vi.fn(),
         startLiveTurn,
@@ -89,6 +90,7 @@ describe('G2Recorder', () => {
     );
     const controller = new TurnController({
       api: {
+        checkReady: vi.fn(async () => undefined),
         pair: vi.fn(),
         submitTurn,
         getTurn: vi.fn(),
@@ -137,6 +139,7 @@ describe('G2Recorder', () => {
     const abort = vi.fn();
     const controller = new TurnController({
       api: {
+        checkReady: vi.fn(async () => undefined),
         pair: vi.fn(),
         submitTurn: vi.fn(),
         startLiveTurn: () => ({ push: vi.fn(), finish: vi.fn(), abort }),

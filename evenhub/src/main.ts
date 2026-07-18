@@ -16,11 +16,8 @@ import type { AppState } from './state';
 import { BridgeStorage } from './storage';
 import { mountCompanionUi } from './ui';
 
-const APPROVED_ORIGIN = 'https://nanoclaw.local';
-const origin = import.meta.env.VITE_EVENHUB_ORIGIN || APPROVED_ORIGIN;
-if (origin !== APPROVED_ORIGIN) {
-  throw new Error(`VITE_EVENHUB_ORIGIN must be ${APPROVED_ORIGIN}`);
-}
+const origin = import.meta.env.VITE_EVENHUB_ORIGIN;
+if (!origin) throw new Error('VITE_EVENHUB_ORIGIN is required');
 const BODY_WIDTH = 576;
 const BODY_HEIGHT = 240;
 const BODY_PADDING = 4;
@@ -57,7 +54,7 @@ const startupPager = new TextContainerProperty({
   paddingLength: 4,
   containerID: 2,
   containerName: 'pager',
-  content: 'Private LAN voice link',
+  content: 'Private Tailscale voice link',
   isEventCapture: 0,
 });
 await bridge.createStartUpPageContainer(
@@ -155,7 +152,10 @@ void controller.boot().catch((error) => {
 function glassesView(state: AppState): { body: string; pager: string } {
   switch (state.kind) {
     case 'booting':
-      return { body: 'NanoClaw\nConnecting…', pager: 'Private LAN voice link' };
+      return {
+        body: 'NanoClaw\nConnecting…',
+        pager: 'Private Tailscale voice link',
+      };
     case 'pairing':
       return {
         body: `Pairing required\n\nOpen the companion screen.${state.error ? `\n\n${state.error}` : ''}`,
@@ -183,7 +183,7 @@ function glassesView(state: AppState): { body: string; pager: string } {
     case 'uploading':
       return {
         body: 'Audio captured\n\nSending securely…',
-        pager: 'Local network',
+        pager: 'Private tailnet',
       };
     case 'transcribing':
       return {
