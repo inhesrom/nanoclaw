@@ -1,25 +1,23 @@
 import {
   AudioInputSource,
   CreateStartUpPageContainer,
-  TextContainerProperty,
   waitForEvenAppBridge,
 } from '@evenrealities/even_hub_sdk';
 
 import { EvenHubApi } from './api';
-import { conversationProjectionForState, TurnController } from './controller';
+import { TurnController } from './controller';
 import { routeHubInteraction } from './event-routing';
+import { createG2StartupContainers, glassesView } from './g2-display';
 import { CoalescingGlassesRenderer } from './glasses-renderer';
 import { handlePrimaryTap } from './primary-tap';
 import { G2Recorder } from './recorder';
 import type { AppState } from './state';
 import { BridgeStorage } from './storage';
+import { ThinkingStatusAnimation } from './thinking-status';
 import { mountCompanionUi } from './ui';
 
 const origin = import.meta.env.VITE_EVENHUB_ORIGIN;
 if (!origin) throw new Error('VITE_EVENHUB_ORIGIN is required');
-const BODY_WIDTH = 576;
-const BODY_HEIGHT = 240;
-const BODY_PADDING = 4;
 
 interface HubEvent {
   audioEvent?: { audioPcm?: Uint8Array };
@@ -28,36 +26,14 @@ interface HubEvent {
 }
 
 const bridge = await waitForEvenAppBridge();
-const startupBody = new TextContainerProperty({
-  xPosition: 0,
-  yPosition: 0,
-  width: BODY_WIDTH,
-  height: BODY_HEIGHT,
-  borderWidth: 0,
-  borderColor: 5,
-  paddingLength: BODY_PADDING,
-  containerID: 1,
-  containerName: 'body',
-  content: 'NanoClaw\nConnecting…',
-  isEventCapture: 1,
-});
-const startupPager = new TextContainerProperty({
-  xPosition: 0,
-  yPosition: 250,
-  width: 576,
-  height: 30,
-  borderWidth: 0,
-  borderColor: 5,
-  paddingLength: 4,
-  containerID: 2,
-  containerName: 'pager',
-  content: 'Private Tailscale voice link',
-  isEventCapture: 0,
+const startupContainers = createG2StartupContainers({
+  feed: 'NanoClaw\nConnecting…',
+  status: 'Private Tailscale voice link',
 });
 await bridge.createStartUpPageContainer(
   new CreateStartUpPageContainer({
-    containerTotalNum: 2,
-    textObject: [startupBody, startupPager],
+    containerTotalNum: startupContainers.length,
+    textObject: startupContainers,
   }),
 );
 
@@ -76,10 +52,17 @@ const glasses = new CoalescingGlassesRenderer({
   bridge,
   onError: (error) => console.error('Glasses render failed:', error),
 });
+const thinkingStatus = new ThinkingStatusAnimation((status) => {
+  const state = controllerRef.current?.state;
+  if (state?.kind === 'thinking') {
+    glasses.render(glassesView(state, status));
+  }
+});
 
 function render(state: AppState): void {
   companion.render(state);
-  glasses.render(glassesView(state));
+  thinkingStatus.sync(state.kind === 'thinking');
+  glasses.render(glassesView(state, thinkingStatus.status));
 }
 
 const controller = new TurnController({
@@ -104,6 +87,7 @@ async function cleanup(): Promise<void> {
   cleanedUp = true;
   await recorder.cancel();
   unsubscribe();
+  thinkingStatus.dispose();
   controller.dispose();
 }
 
@@ -161,78 +145,3 @@ void controller.boot().catch((error) => {
     error instanceof Error ? error.message : 'Could not restore plugin state.',
   );
 });
-
-function glassesView(state: AppState): { body: string; pager: string } {
-  const feed = conversationProjectionForState(state);
-  const feedBody = feed.body || 'NanoClaw\n\nTap to record';
-  const hint = contextualHint(feed.hasEarlier, feed.hasLater);
-  switch (state.kind) {
-    case 'booting':
-      return {
-        body: 'NanoClaw\nConnecting…',
-        pager: 'Private Tailscale voice link',
-      };
-    case 'pairing':
-      return {
-        body: `Pairing required\n\nOpen the companion screen.${state.error ? `\n\n${state.error}` : ''}`,
-        pager: 'Companion setup',
-      };
-    case 'ready':
-      return {
-        body: feedBody,
-        pager: joinStatus(hint, 'Tap: record'),
-      };
-    case 'recording':
-      return {
-        body: feed.body || 'Listening…',
-        pager: joinStatus(
-          hint,
-          `Listening ${(state.bytes / 32_000).toFixed(1)}s · tap: stop`,
-        ),
-      };
-    case 'stopping':
-      return {
-        body: feed.body || 'Transcribing…',
-        pager: joinStatus(hint, 'Transcribing'),
-      };
-    case 'uploading':
-      return {
-        body: feed.body || 'Transcribing…',
-        pager: joinStatus(hint, 'Transcribing'),
-      };
-    case 'transcribing':
-      return {
-        body: feed.body || 'Transcribing…',
-        pager: joinStatus(hint, state.notice || 'Transcribing'),
-      };
-    case 'review':
-      return {
-        body: feedBody,
-        pager: state.choiceOpen
-          ? state.choice === 'send'
-            ? '› Send     Try again'
-            : '  Send   › Try again'
-          : joinStatus(hint, state.notice || 'Tap: choose'),
-      };
-    case 'thinking':
-      return {
-        body: feed.body || 'NanoClaw is thinking…',
-        pager: joinStatus(hint, state.notice || 'Thinking'),
-      };
-    case 'error':
-      return {
-        body: feed.body || 'NanoClaw',
-        pager: state.retryable ? 'Retry in companion' : 'Return in companion',
-      };
-  }
-}
-
-function contextualHint(earlier: boolean, later: boolean): string {
-  return [earlier ? 'Earlier' : '', later ? 'Later' : '']
-    .filter(Boolean)
-    .join(' · ');
-}
-
-function joinStatus(hint: string, status: string): string {
-  return [hint, status].filter(Boolean).join(' · ');
-}

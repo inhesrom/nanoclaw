@@ -1,7 +1,7 @@
 # EvenHub retained private LAN deployment
 
 This runbook retains the original LAN diagnostic and rollback boundary on one
-Raspberry Pi 5. EvenHub 0.4.0 uses the
+Raspberry Pi 5. EvenHub 0.4.1 uses the
 [Tailscale deployment](evenhub-tailscale-deployment.md) as its sole application
 route; it never falls back to this hostname. The
 tracked files under `deploy/evenhub/` are inert templates; repository tests do
@@ -58,7 +58,7 @@ chmod 0600 .env.private
 npm test
 npm run pack:verify
 npm run pack:private
-sha256sum nanoclaw-evenhub-0.4.0.ehpk
+sha256sum nanoclaw-evenhub-0.4.1.ehpk
 ```
 
 `pack:verify` builds two packages in separate temporary paths and fails unless
@@ -213,7 +213,11 @@ Validate the boundary from the approved LAN and from a disallowed network:
 
 ```bash
 curl --fail https://nanoclaw.local/api/even/v1/healthz
-curl --fail https://nanoclaw.local/api/even/v1/readyz
+curl --fail -H 'X-EvenHub-Protocol-Version: 2' \
+  https://nanoclaw.local/api/even/v1/readyz
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  -H 'X-EvenHub-Protocol-Version: 1' \
+  https://nanoclaw.local/api/even/v1/readyz)" = 426
 sudo ss -lntup
 sudo nft list table inet nanoclaw_evenhub
 ```
@@ -227,8 +231,11 @@ only on loopback. Caddy must pass WebSocket upgrades on `/api/even/*` and return
 Pair with `npm run evenhub:pair`, enter the one-time code, then revoke and pair
 again. Run short, representative, and 30-second physical turns. Confirm
 tap-to-start/tap-to-stop, changing live snapshots, a stable complete draft,
-review scrolling, both confirmation decisions, identical Reply content in the
-continuous feed, relaunch restoration, and automatic stop. Assert that no
+`Transcribing…` until the final server transcript, the automatically open
+`Send` choice, contextual scroll arrows, all four `Thinking` frames, unclipped
+rounded-frame geometry, and working gestures with the native right-side marker.
+Exercise both confirmation decisions, identical Reply content in the continuous
+feed, relaunch restoration, and automatic stop. Assert that no
 WhatsApp prompt exists before `Send` and that `Try again` starts recording only
 after discard acknowledgement. Capture stays off during this smoke sequence.
 

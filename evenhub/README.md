@@ -35,5 +35,5 @@ retained diagnostic endpoint is covered by the
 failure semantics are in the
 [streaming protocol](../docs/evenhub-streaming-protocol.md).
 
-Protocol 2 requires host and plugin version 0.4.0 together. Older clients receive
+Protocol 2 requires host and plugin version 0.4.1 together. Older clients receive
 `426 client_upgrade_required` before audio is accepted.

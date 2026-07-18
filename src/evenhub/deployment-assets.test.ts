@@ -194,7 +194,7 @@ describe('EvenHub deployment assets', () => {
       permissions: Array<{ name: string; whitelist?: string[] }>;
     };
     expect(packageJson.private).toBe(true);
-    expect(packageJson.version).toBe('0.4.0');
+    expect(packageJson.version).toBe('0.4.1');
     expect(packageJson.dependencies).toEqual({
       '@evenrealities/even_hub_sdk': '0.0.12',
       '@evenrealities/pretext': '0.1.4',
@@ -208,6 +208,12 @@ describe('EvenHub deployment assets', () => {
     });
     expect(manifest.package_id).toBe('dev.inhesrom.nanoclaw.evenhub');
     expect(manifest.version).toBe(packageJson.version);
+    expect(
+      fs.readFileSync(
+        path.join(root, 'evenhub', 'scripts', 'pack-private.mjs'),
+        'utf8',
+      ),
+    ).toContain(`nanoclaw-evenhub-${packageJson.version}.ehpk`);
     expect(manifest.permissions.map(({ name }) => name)).toEqual([
       'g2-microphone',
       'network',

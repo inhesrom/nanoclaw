@@ -1,6 +1,6 @@
 # EvenHub private Tailscale deployment
 
-EvenHub 0.4.0 has one private application origin,
+EvenHub 0.4.1 has one private application origin,
 `https://<device>.<tailnet>.ts.net`. The concrete value is stored only in the
 owner's ignored build configuration and the installed backend environment; it
 must not be committed. Tailscale Serve terminates HTTPS on the Pi's tailnet
@@ -57,7 +57,7 @@ chmod 0600 .env.private
 npm test
 npm run pack:verify
 npm run pack:private
-sha256sum nanoclaw-evenhub-0.4.0.ehpk
+sha256sum nanoclaw-evenhub-0.4.1.ehpk
 ```
 
 The private packer requires mode `0600`, validates a canonical HTTPS `ts.net`
@@ -131,7 +131,11 @@ on the phone, launch must fail before recording with the actionable retry state.
 ```bash
 EVENHUB_FQDN=device.tailnet.ts.net
 curl --fail "https://${EVENHUB_FQDN}/api/even/v1/healthz"
-curl --fail "https://${EVENHUB_FQDN}/api/even/v1/readyz"
+curl --fail -H 'X-EvenHub-Protocol-Version: 2' \
+  "https://${EVENHUB_FQDN}/api/even/v1/readyz"
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  -H 'X-EvenHub-Protocol-Version: 1' \
+  "https://${EVENHUB_FQDN}/api/even/v1/readyz")" = 426
 sudo tailscale serve status --json
 sudo tailscale funnel status
 sudo ss -lntup
@@ -154,10 +158,14 @@ Required observations:
 
 Run short, representative, and automatic 30-second physical turns with
 Tailscale enabled on both Wi-Fi and cellular. Confirm live draft following,
-tap-to-stop, the complete review draft, four-line feed scrolling, `Send`, and
-`Try again`. Verify no WhatsApp prompt exists before `Send`, discard starts a
-replacement recording only after host acknowledgement, relaunch restores an
-unresolved draft, and completed history is session-only. Then disconnect
+tap-to-stop, `Transcribing…` until the final transcript, the automatically open
+review strip with `Send` selected, and four-line feed scrolling with contextual
+arrow hints. Check all four `Thinking` frames, the unclipped rounded frame, and
+that the native right-side capture marker still permits tap, double-tap, and
+swipe gestures. Exercise `Send` and `Try again`. Verify no WhatsApp prompt exists
+before `Send`, discard starts a replacement recording only after host
+acknowledgement, relaunch restores an unresolved draft with the strip open, and
+completed history is session-only. Then disconnect
 Tailscale during recording and confirmation, reconnect, and retry; the retained
 PCM/idempotency key or draft must produce at most one turn and never infer a
 send decision.

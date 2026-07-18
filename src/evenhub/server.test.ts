@@ -13,7 +13,7 @@ import {
   transitionEvenTurnState,
 } from '../db.js';
 import { createEvenPairingCode } from './pairing.js';
-import { EvenHubServer } from './server.js';
+import { EVENHUB_RELEASE_VERSION, EvenHubServer } from './server.js';
 
 describe('EvenHub LAN API', () => {
   let server: EvenHubServer;
@@ -376,7 +376,11 @@ describe('EvenHub LAN API', () => {
       method: 'GET',
       pathname: '/api/even/v1/healthz',
     });
-    expect(health.status).toBe(200);
+    expect(health).toMatchObject({
+      status: 200,
+      body: { version: '0.4.1' },
+    });
+    expect(EVENHUB_RELEASE_VERSION).toBe('0.4.1');
     const token = await pair();
 
     const oldReady = await server.inject({

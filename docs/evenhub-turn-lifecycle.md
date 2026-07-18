@@ -1,6 +1,6 @@
 # EvenHub confirmed turn lifecycle
 
-EvenHub 0.4.0 uses one durable lifecycle:
+EvenHub 0.4.1 uses one durable lifecycle:
 
 ```text
 recording → transcribing → awaiting_confirmation

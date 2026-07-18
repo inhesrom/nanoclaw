@@ -1,8 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import {
+  contextualScrollHint,
+  createG2StartupContainers,
+  glassesView,
+} from '../src/g2-display';
 import { CoalescingGlassesRenderer } from '../src/glasses-renderer';
 import { handlePrimaryTap } from '../src/primary-tap';
+import { G2_FEED_LINES } from '../src/conversation-layout';
 import type { AppState, SessionState } from '../src/state';
+import {
+  THINKING_STATUS_FRAMES,
+  THINKING_STATUS_INTERVAL_MS,
+  ThinkingStatusAnimation,
+} from '../src/thinking-status';
 import { renderCompanionState } from '../src/ui';
 
 describe('CoalescingGlassesRenderer', () => {
@@ -24,20 +35,226 @@ describe('CoalescingGlassesRenderer', () => {
       onError: vi.fn(),
     });
 
-    renderer.render({ body: 'You: live 0.1', pager: 'Listening' });
+    renderer.render({ feed: 'You: live 0.1', status: 'Tap to stop' });
     await Promise.resolve();
-    renderer.render({ body: 'You: live 0.2', pager: 'Listening' });
-    renderer.render({ body: 'You: complete draft', pager: 'Transcribing' });
+    renderer.render({ feed: 'You: live 0.2', status: 'Tap to stop' });
+    renderer.render({
+      feed: 'You: complete draft',
+      status: 'Transcribing…',
+    });
 
     releaseFirstWrite();
     await renderer.waitForIdle();
 
     expect(contents).toEqual([
       'You: live 0.1',
-      'Listening',
       'You: complete draft',
-      'Transcribing',
+      'Transcribing…',
     ]);
+  });
+
+  it('updates thinking status frames without resending an unchanged feed', async () => {
+    const updates: Array<{ name?: string; content?: string }> = [];
+    const renderer = new CoalescingGlassesRenderer({
+      bridge: {
+        async textContainerUpgrade(update) {
+          updates.push({
+            name: update.containerName,
+            content: update.content,
+          });
+        },
+      },
+      onError: vi.fn(),
+    });
+
+    for (const status of THINKING_STATUS_FRAMES) {
+      renderer.render({ feed: 'You: complete draft', status });
+      await renderer.waitForIdle();
+    }
+
+    expect(
+      updates
+        .filter((update) => update.name === 'feed')
+        .map((item) => item.content),
+    ).toEqual(['You: complete draft']);
+    expect(
+      updates
+        .filter((update) => update.name === 'status')
+        .map((item) => item.content),
+    ).toEqual(THINKING_STATUS_FRAMES);
+  });
+});
+
+describe('G2 display', () => {
+  it('creates a framed three-container stack with capture only on status', () => {
+    const containers = createG2StartupContainers({
+      feed: 'NanoClaw',
+      status: 'Tap to record',
+    });
+
+    expect(containers).toHaveLength(3);
+    expect(G2_FEED_LINES).toBe(8);
+    expect(containers[0]).toMatchObject({
+      xPosition: 2,
+      yPosition: 2,
+      width: 572,
+      height: 284,
+      borderWidth: 1,
+      borderRadius: 8,
+      zOrderIndex: 1,
+    });
+    expect(containers[1]).toMatchObject({
+      containerName: 'feed',
+      height: 240,
+      zOrderIndex: 2,
+    });
+    expect(containers[1].isEventCapture).toBeUndefined();
+    expect(containers[2]).toMatchObject({
+      containerName: 'status',
+      yPosition: 250,
+      height: 30,
+      isEventCapture: 1,
+      zOrderIndex: 3,
+    });
+    expect(containers.filter((item) => item.isEventCapture === 1)).toHaveLength(
+      1,
+    );
+    expect(new Set(containers.map((item) => item.zOrderIndex)).size).toBe(3);
+  });
+
+  it('uses exact sentence-case status copy and contextual scroll arrows', () => {
+    expect(contextualScrollHint(false, false)).toBe('');
+    expect(contextualScrollHint(true, false)).toBe('Scroll ↑');
+    expect(contextualScrollHint(false, true)).toBe('Scroll ↓');
+    expect(contextualScrollHint(true, true)).toBe('Scroll ↑↓');
+
+    expect(glassesView({ kind: 'ready', session: emptySession() }).status).toBe(
+      'Tap to record',
+    );
+    expect(
+      glassesView({
+        kind: 'recording',
+        startedAt: 1,
+        bytes: 8_000,
+        session: emptySession(),
+      }).status,
+    ).toBe('Tap to stop');
+    expect(
+      glassesView({
+        kind: 'stopping',
+        finalText: 'complete draft',
+        session: emptySession(),
+      }).status,
+    ).toBe('Transcribing…');
+  });
+
+  it('gives the open choice strip precedence over overflow hints', () => {
+    const state = reviewState(true);
+    state.session.turns = new Array(12).fill(undefined).map((_, index) => ({
+      turnId: `prior-${index}`,
+      transcript: `earlier prompt ${index}`,
+      reply: `earlier reply ${index}`,
+    }));
+    state.session.manuallyScrolled = true;
+    state.session.scrollOffset = 4;
+
+    expect(glassesView(state).status).toBe('› Send     Try again');
+    expect(glassesView(state).status).not.toContain('Scroll');
+  });
+
+  it('projects the ready-to-error simulator states into nonempty frames', () => {
+    const turn = { id: 'turn-1', idempotencyKey: 'key-1' };
+    const states: Array<{ state: AppState; expectedStatus: string }> = [
+      {
+        state: { kind: 'ready', session: emptySession() },
+        expectedStatus: 'Tap to record',
+      },
+      {
+        state: {
+          kind: 'recording',
+          startedAt: 1,
+          bytes: 8_000,
+          finalText: 'live',
+          interimText: 'draft',
+          session: emptySession(),
+        },
+        expectedStatus: 'Tap to stop',
+      },
+      {
+        state: {
+          kind: 'stopping',
+          finalText: 'complete',
+          interimText: 'draft',
+          session: emptySession(),
+        },
+        expectedStatus: 'Transcribing…',
+      },
+      {
+        state: {
+          kind: 'transcribing',
+          turn,
+          transcript: 'complete draft',
+          session: emptySession(),
+        },
+        expectedStatus: 'Transcribing…',
+      },
+      {
+        state: reviewState(true),
+        expectedStatus: '› Send     Try again',
+      },
+      {
+        state: {
+          kind: 'thinking',
+          turn,
+          transcript: 'complete draft',
+          session: emptySession(),
+        },
+        expectedStatus: 'Thinking..',
+      },
+      {
+        state: {
+          kind: 'error',
+          message: 'Host unavailable',
+          retryable: true,
+          session: emptySession(),
+        },
+        expectedStatus: 'Retry in companion',
+      },
+    ];
+
+    for (const { state, expectedStatus } of states) {
+      const view = glassesView(state, 'Thinking..');
+      expect(view.feed.length).toBeGreaterThan(0);
+      expect(view.status).toBe(expectedStatus);
+    }
+  });
+});
+
+describe('ThinkingStatusAnimation', () => {
+  it('cycles every 600 ms and stops outside thinking', () => {
+    vi.useFakeTimers();
+    try {
+      const onFrame = vi.fn();
+      const animation = new ThinkingStatusAnimation(onFrame);
+
+      animation.sync(true);
+      expect(animation.status).toBe('Thinking');
+      for (const frame of THINKING_STATUS_FRAMES.slice(1)) {
+        vi.advanceTimersByTime(THINKING_STATUS_INTERVAL_MS);
+        expect(animation.status).toBe(frame);
+      }
+      vi.advanceTimersByTime(THINKING_STATUS_INTERVAL_MS);
+      expect(animation.status).toBe('Thinking');
+      expect(onFrame).toHaveBeenCalledTimes(4);
+
+      animation.sync(false);
+      vi.advanceTimersByTime(THINKING_STATUS_INTERVAL_MS * 2);
+      expect(onFrame).toHaveBeenCalledTimes(4);
+      expect(animation.status).toBe('Thinking');
+      animation.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -57,10 +274,14 @@ describe('handlePrimaryTap', () => {
     expect(recording.recorder.finish).toHaveBeenCalledOnce();
   });
 
-  it('opens confirmation on the first review tap', async () => {
-    const actions = createActions(reviewState(false));
+  it('does not expose confirmation before the final server transcript', async () => {
+    const actions = createActions({
+      kind: 'stopping',
+      finalText: 'partial draft',
+      session: emptySession(),
+    });
     await handlePrimaryTap(actions);
-    expect(actions.controller.openConfirmationChoice).toHaveBeenCalledOnce();
+    expect(actions.controller.openConfirmationChoice).not.toHaveBeenCalled();
     expect(actions.controller.confirm).not.toHaveBeenCalled();
   });
 

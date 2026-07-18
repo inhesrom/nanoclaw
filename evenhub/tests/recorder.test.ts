@@ -193,4 +193,8 @@ describe('routeHubInteraction', () => {
       expect(routeHubInteraction(event)).toBe('primary');
     },
   );
+
+  it('routes a review double tap to the exit/close-choice interaction', () => {
+    expect(routeHubInteraction({ textEvent: { eventType: 3 } })).toBe('exit');
+  });
 });

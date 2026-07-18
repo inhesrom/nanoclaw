@@ -1,5 +1,16 @@
 # EvenHub changelog
 
+## 0.4.1
+
+- Open the G2 confirmation strip automatically only after the host returns the
+  complete final transcript, with `Send` selected by default.
+- Use sentence-case recording and transcription copy, contextual scroll arrows,
+  and a restrained four-frame `Thinking` status animation.
+- Add a rounded outer display frame and keep gesture capture on the status dock
+  while leaving the feed free of capture metadata.
+- Update only the changed G2 text container so thinking frames do not resend an
+  unchanged transcript over BLE.
+
 ## 0.4.0
 
 - Require protocol 2 across the host and plugin so an outdated client fails

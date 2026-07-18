@@ -7,7 +7,7 @@ import {
 } from '../src/state';
 
 describe('EvenHub app reducer', () => {
-  it('stops at draft review before entering thinking', () => {
+  it('opens final draft review on Send before entering thinking', () => {
     const ready = reduceAppState(initialState, {
       type: 'RESTORED',
       hasToken: true,
@@ -37,19 +37,20 @@ describe('EvenHub app reducer', () => {
     expect(review).toMatchObject({
       kind: 'review',
       transcript: 'hello',
-      choiceOpen: false,
-      choice: 'send',
-    });
-    const open = reduceAppState(review, { type: 'CONFIRMATION_OPEN' });
-    expect(open).toMatchObject({
-      kind: 'review',
       choiceOpen: true,
       choice: 'send',
     });
-    expect(reduceAppState(open, { type: 'CONFIRMATION_TOGGLE' })).toMatchObject(
-      {
-        choice: 'discard',
-      },
+    const toggled = reduceAppState(review, { type: 'CONFIRMATION_TOGGLE' });
+    expect(toggled).toMatchObject({
+      kind: 'review',
+      choiceOpen: true,
+      choice: 'discard',
+    });
+
+    const closed = reduceAppState(toggled, { type: 'CONFIRMATION_CLOSE' });
+    expect(closed).toMatchObject({ kind: 'review', choiceOpen: false });
+    expect(reduceAppState(closed, { type: 'CONFIRMATION_OPEN' })).toMatchObject(
+      { kind: 'review', choiceOpen: true, choice: 'send' },
     );
 
     const thinking = reduceAppState(review, {

@@ -1,9 +1,6 @@
 import { TextContainerUpgrade } from '@evenrealities/even_hub_sdk';
 
-export interface GlassesView {
-  body: string;
-  pager: string;
-}
+import type { GlassesView } from './g2-display';
 
 interface GlassesBridgePort {
   textContainerUpgrade(update: TextContainerUpgrade): Promise<unknown>;
@@ -17,6 +14,7 @@ interface CoalescingGlassesRendererOptions {
 export class CoalescingGlassesRenderer {
   private pending?: GlassesView;
   private rendering?: Promise<void>;
+  private sent: Partial<GlassesView> = {};
 
   constructor(private readonly options: CoalescingGlassesRendererOptions) {}
 
@@ -42,20 +40,27 @@ export class CoalescingGlassesRenderer {
       const view = this.pending;
       this.pending = undefined;
       try {
-        await this.options.bridge.textContainerUpgrade(
-          new TextContainerUpgrade({
-            containerID: 1,
-            containerName: 'body',
-            content: view.body,
-          }),
-        );
-        await this.options.bridge.textContainerUpgrade(
-          new TextContainerUpgrade({
-            containerID: 2,
-            containerName: 'pager',
-            content: view.pager,
-          }),
-        );
+        if (view.feed !== this.sent.feed) {
+          await this.options.bridge.textContainerUpgrade(
+            new TextContainerUpgrade({
+              containerID: 2,
+              containerName: 'feed',
+              content: view.feed,
+            }),
+          );
+          this.sent.feed = view.feed;
+        }
+        if (this.pending) continue;
+        if (view.status !== this.sent.status) {
+          await this.options.bridge.textContainerUpgrade(
+            new TextContainerUpgrade({
+              containerID: 3,
+              containerName: 'status',
+              content: view.status,
+            }),
+          );
+          this.sent.status = view.status;
+        }
       } catch (error) {
         this.options.onError(error);
       }

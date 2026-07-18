@@ -105,6 +105,8 @@ describe('TurnController', () => {
     expect(controller.state).toMatchObject({
       kind: 'review',
       transcript: 'fixture audio',
+      choiceOpen: true,
+      choice: 'send',
     });
     expect(getTurn).toHaveBeenCalledOnce();
     expect(storage.values.get(STORAGE_KEYS.activeTurnId)).toBe('turn-1');
@@ -125,8 +127,46 @@ describe('TurnController', () => {
 
     await controller.submit(new Uint8Array(8_000), 250);
 
-    expect(controller.state.kind).toBe('review');
+    expect(controller.state).toMatchObject({
+      kind: 'review',
+      choiceOpen: true,
+      choice: 'send',
+    });
     expect(confirmTurn).not.toHaveBeenCalled();
+  });
+
+  it('opens the streamed final draft only after finish returns it', async () => {
+    let releaseFinal!: () => void;
+    const pendingFinal = new Promise<void>((resolve) => {
+      releaseFinal = resolve;
+    });
+    const finish = vi.fn<LiveTurn['finish']>(async () => {
+      await pendingFinal;
+      return draftTurn;
+    });
+    const controller = new TurnController({
+      api: api({
+        startLiveTurn: () => ({ push: vi.fn(), finish, abort: vi.fn() }),
+      }),
+      storage: tokenStorage(),
+      onState: () => undefined,
+      createIdempotencyKey: () => 'stream-key',
+    });
+    await controller.boot();
+    controller.startRecording();
+    controller.recordingStopped();
+
+    const submitting = controller.submit(new Uint8Array(8_000), 250);
+    expect(controller.state.kind).toBe('stopping');
+    releaseFinal();
+    await submitting;
+
+    expect(controller.state).toMatchObject({
+      kind: 'review',
+      transcript: 'fixture audio',
+      choiceOpen: true,
+      choice: 'send',
+    });
   });
 
   it('sends only after confirmation and adds the exact reply to the session feed', async () => {
@@ -255,11 +295,17 @@ describe('TurnController', () => {
     const finish = vi.fn<LiveTurn['finish']>(async () => {
       throw new Error('stream disconnected');
     });
-    const submitTurn = vi.fn(async () => draftTurn);
+    const submitTurn = vi.fn(async () => ({
+      ...draftTurn,
+      state: 'accepted' as const,
+      transcript: undefined,
+    }));
+    const getTurn = vi.fn(async () => draftTurn);
     const controller = new TurnController({
       api: api({
         startLiveTurn: () => ({ push: vi.fn(), finish, abort: vi.fn() }),
         submitTurn,
+        getTurn,
       }),
       storage: tokenStorage(),
       onState: () => undefined,
@@ -274,7 +320,12 @@ describe('TurnController', () => {
 
     expect(finish).toHaveBeenCalledWith(pcm, 250);
     expect(submitTurn).toHaveBeenCalledWith('token', pcm, 250, 'hybrid-key');
-    expect(controller.state.kind).toBe('review');
+    expect(getTurn).toHaveBeenCalledOnce();
+    expect(controller.state).toMatchObject({
+      kind: 'review',
+      choiceOpen: true,
+      choice: 'send',
+    });
   });
 });
 

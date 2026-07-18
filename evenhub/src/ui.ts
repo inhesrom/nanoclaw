@@ -173,15 +173,15 @@ function statusText(state: AppState): string {
     case 'pairing':
       return 'Run npm run evenhub:pair on the host.';
     case 'ready':
-      return 'Tap G2 to record.';
+      return 'Tap to record.';
     case 'recording':
-      return `Listening · ${(state.bytes / 32_000).toFixed(1)}s · tap G2 to stop`;
+      return `Listening · ${(state.bytes / 32_000).toFixed(1)}s · Tap to stop`;
     case 'stopping':
     case 'uploading':
     case 'transcribing':
       return state.kind === 'transcribing' && state.notice
         ? state.notice
-        : 'Transcribing locally…';
+        : 'Transcribing…';
     case 'review':
       return state.notice || 'Draft is waiting. Nothing has been sent.';
     case 'thinking':

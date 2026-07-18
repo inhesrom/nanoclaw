@@ -354,7 +354,7 @@ function stateForServerTurn(
       kind: 'review',
       turn,
       transcript: transcript || '(no speech recognized)',
-      choiceOpen: false,
+      choiceOpen: true,
       choice: 'send',
       session: { ...state.session, manuallyScrolled: false },
     };
