@@ -552,9 +552,9 @@ describe('EvenHub LAN API', () => {
     });
     expect(health).toMatchObject({
       status: 200,
-      body: { version: '0.4.3' },
+      body: { version: '0.4.4' },
     });
-    expect(EVENHUB_RELEASE_VERSION).toBe('0.4.3');
+    expect(EVENHUB_RELEASE_VERSION).toBe('0.4.4');
     const token = await pair();
 
     const oldReady = await server.inject({

@@ -4,6 +4,8 @@ export const G2_FEED_WIDTH = 544;
 export const G2_FEED_LINES = 8;
 export const G2_SCROLL_LINES = 4;
 export const G2_SCROLLBAR_ROWS = 8;
+export const G2_SCROLLBAR_TRACK_GLYPH = ' ';
+export const G2_SCROLLBAR_THUMB_GLYPH = '|';
 
 export type ConversationSpeaker = 'You' | 'NanoClaw' | 'Notice';
 
@@ -108,9 +110,11 @@ export function projectConversationScrollbar(
       ? 0
       : Math.round((projection.offset / projection.maxOffset) * travel);
   return new Array(trackRows)
-    .fill('│')
+    .fill(G2_SCROLLBAR_TRACK_GLYPH)
     .map((glyph, row) =>
-      row >= thumbStart && row < thumbStart + thumbRows ? '█' : glyph,
+      row >= thumbStart && row < thumbStart + thumbRows
+        ? G2_SCROLLBAR_THUMB_GLYPH
+        : glyph,
     )
     .join('\n');
 }

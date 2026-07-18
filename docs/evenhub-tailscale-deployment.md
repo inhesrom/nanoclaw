@@ -1,6 +1,6 @@
 # EvenHub private Tailscale deployment
 
-EvenHub 0.4.3 has one private application origin,
+EvenHub 0.4.4 has one private application origin,
 `https://<device>.<tailnet>.ts.net`. The concrete value is stored only in the
 owner's ignored build configuration and the installed backend environment; it
 must not be committed. Tailscale Serve terminates HTTPS on the Pi's tailnet
@@ -57,7 +57,7 @@ chmod 0600 .env.private
 npm test
 npm run pack:verify
 npm run pack:private
-sha256sum nanoclaw-evenhub-0.4.3.ehpk
+sha256sum nanoclaw-evenhub-0.4.4.ehpk
 ```
 
 The private packer requires mode `0600`, validates a canonical HTTPS `ts.net`
@@ -163,8 +163,9 @@ Run short, representative, and automatic 30-second physical turns with
 Tailscale enabled on both Wi-Fi and cellular. Confirm live draft following,
 tap-to-stop, `Transcribing…` until the final transcript, the automatically open
 review strip with `Send` selected, and four-line feed scrolling with contextual
-arrow hints. Check the proportional `│`/`█` scrollbar at the top, middle, and
-bottom; verify its glyphs and feed clipping on physical G2 hardware. Check all
+arrow hints. Check the proportional scrollbar's invisible track and `|` thumb
+at the top, middle, and bottom; verify its glyph and feed clipping on physical
+G2 hardware. Check all
 four `Thinking` frames, the unclipped rounded frame, and that the native
 right-side capture marker still permits tap, double-tap, and swipe gestures.
 Exercise voice `Send` and `Try again`, then send a multiline phone prompt and

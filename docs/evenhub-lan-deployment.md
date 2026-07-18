@@ -1,7 +1,7 @@
 # EvenHub retained private LAN deployment
 
 This runbook retains the original LAN diagnostic and rollback boundary on one
-Raspberry Pi 5. EvenHub 0.4.3 uses the
+Raspberry Pi 5. EvenHub 0.4.4 uses the
 [Tailscale deployment](evenhub-tailscale-deployment.md) as its sole application
 route; it never falls back to this hostname. The
 tracked files under `deploy/evenhub/` are inert templates; repository tests do
@@ -58,7 +58,7 @@ chmod 0600 .env.private
 npm test
 npm run pack:verify
 npm run pack:private
-sha256sum nanoclaw-evenhub-0.4.3.ehpk
+sha256sum nanoclaw-evenhub-0.4.4.ehpk
 ```
 
 `pack:verify` builds two packages in separate temporary paths and fails unless

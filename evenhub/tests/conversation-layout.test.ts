@@ -90,14 +90,14 @@ describe('conversation feed layout', () => {
       maxOffset: 8,
     };
     expect(projectConversationScrollbar(sixteenLines).split('\n')).toEqual([
-      '█',
-      '█',
-      '█',
-      '█',
-      '│',
-      '│',
-      '│',
-      '│',
+      '|',
+      '|',
+      '|',
+      '|',
+      ' ',
+      ' ',
+      ' ',
+      ' ',
     ]);
     const thirtyTwoLines = {
       lines: new Array(32).fill('line'),
@@ -107,7 +107,7 @@ describe('conversation feed layout', () => {
     expect(
       projectConversationScrollbar(thirtyTwoLines)
         .split('\n')
-        .filter((glyph) => glyph === '█'),
+        .filter((glyph) => glyph === '|'),
     ).toHaveLength(2);
   });
 
@@ -115,12 +115,24 @@ describe('conversation feed layout', () => {
     const projection = { lines: new Array(16).fill('line'), maxOffset: 8 };
     expect(
       projectConversationScrollbar({ ...projection, offset: 0 }).split('\n'),
-    ).toEqual(['█', '█', '█', '█', '│', '│', '│', '│']);
+    ).toEqual(['|', '|', '|', '|', ' ', ' ', ' ', ' ']);
     expect(
       projectConversationScrollbar({ ...projection, offset: 4 }).split('\n'),
-    ).toEqual(['│', '│', '█', '█', '█', '█', '│', '│']);
+    ).toEqual([' ', ' ', '|', '|', '|', '|', ' ', ' ']);
     expect(
       projectConversationScrollbar({ ...projection, offset: 8 }).split('\n'),
-    ).toEqual(['│', '│', '│', '│', '█', '█', '█', '█']);
+    ).toEqual([' ', ' ', ' ', ' ', '|', '|', '|', '|']);
+  });
+
+  it('keeps non-thumb scrollbar rows visually empty', () => {
+    const rows = projectConversationScrollbar({
+      lines: new Array(16).fill('line'),
+      offset: 0,
+      maxOffset: 8,
+    }).split('\n');
+
+    expect(
+      rows.filter((glyph) => glyph !== '|').every((glyph) => !glyph.trim()),
+    ).toBe(true);
   });
 });

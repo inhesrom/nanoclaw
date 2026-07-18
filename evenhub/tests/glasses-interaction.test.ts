@@ -1,13 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
+import { getTextWidth } from '@evenrealities/pretext';
 
 import {
   contextualScrollHint,
   createG2StartupContainers,
+  G2_CONTAINER_LAYOUT,
   glassesView,
 } from '../src/g2-display';
 import { CoalescingGlassesRenderer } from '../src/glasses-renderer';
 import { handlePrimaryTap } from '../src/primary-tap';
-import { G2_FEED_LINES } from '../src/conversation-layout';
+import {
+  G2_FEED_LINES,
+  projectConversationScrollbar,
+} from '../src/conversation-layout';
 import type { AppState, SessionState } from '../src/state';
 import {
   THINKING_STATUS_FRAMES,
@@ -41,18 +46,18 @@ describe('CoalescingGlassesRenderer', () => {
 
     renderer.render({
       feed: 'You: live 0.1',
-      scrollbar: '█\n│',
+      scrollbar: '|\n ',
       status: 'Tap to stop',
     });
     await Promise.resolve();
     renderer.render({
       feed: 'You: live 0.2',
-      scrollbar: '█\n│',
+      scrollbar: '|\n ',
       status: 'Tap to stop',
     });
     renderer.render({
       feed: 'You: complete draft',
-      scrollbar: '│\n█',
+      scrollbar: ' \n|',
       status: 'Transcribing…',
     });
 
@@ -62,7 +67,7 @@ describe('CoalescingGlassesRenderer', () => {
     expect(contents).toEqual([
       'You: live 0.1',
       'You: complete draft',
-      '│\n█',
+      ' \n|',
       'Transcribing…',
     ]);
   });
@@ -109,11 +114,11 @@ describe('CoalescingGlassesRenderer', () => {
       onError: vi.fn(),
     });
 
-    renderer.render({ feed: 'same feed', scrollbar: '█\n│', status: 'First' });
+    renderer.render({ feed: 'same feed', scrollbar: '|\n ', status: 'First' });
     await renderer.waitForIdle();
-    renderer.render({ feed: 'same feed', scrollbar: '│\n█', status: 'First' });
+    renderer.render({ feed: 'same feed', scrollbar: ' \n|', status: 'First' });
     await renderer.waitForIdle();
-    renderer.render({ feed: 'same feed', scrollbar: '│\n█', status: 'Second' });
+    renderer.render({ feed: 'same feed', scrollbar: ' \n|', status: 'Second' });
     await renderer.waitForIdle();
 
     expect(updates.filter((update) => update.name === 'feed')).toHaveLength(1);
@@ -171,6 +176,24 @@ describe('G2 display', () => {
       1,
     );
     expect(new Set(containers.map((item) => item.zOrderIndex)).size).toBe(4);
+  });
+
+  it('fits every scrollbar glyph inside its padded text container', () => {
+    const scrollbar = projectConversationScrollbar({
+      lines: new Array(16).fill('line'),
+      offset: 0,
+      maxOffset: 8,
+    });
+    const layout = G2_CONTAINER_LAYOUT.scrollbar;
+    const innerWidth =
+      layout.width - 2 * (layout.paddingLength + layout.borderWidth);
+
+    for (const glyph of new Set(scrollbar.split('\n'))) {
+      expect(
+        getTextWidth(glyph),
+        `${JSON.stringify(glyph)} must fit within ${innerWidth}px`,
+      ).toBeLessThanOrEqual(innerWidth);
+    }
   });
 
   it('uses exact sentence-case status copy and contextual scroll arrows', () => {

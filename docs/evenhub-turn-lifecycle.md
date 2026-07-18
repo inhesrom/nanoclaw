@@ -1,6 +1,6 @@
 # EvenHub durable turn lifecycle
 
-EvenHub 0.4.3 uses one durable lifecycle with two input paths:
+EvenHub 0.4.4 uses one durable lifecycle with two input paths:
 
 ```text
 voice: recording → transcribing → awaiting_confirmation

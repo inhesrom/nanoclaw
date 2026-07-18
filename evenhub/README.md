@@ -36,7 +36,7 @@ retained diagnostic endpoint is covered by the
 failure semantics are in the
 [streaming protocol](../docs/evenhub-streaming-protocol.md).
 
-Protocol 2 requires host and plugin version 0.4.3 together. Older clients receive
+Protocol 2 requires host and plugin version 0.4.4 together. Older clients receive
 `426 client_upgrade_required` before audio or text is accepted. The installed
 EvenHub simulator is unavailable on Linux arm64; projection tests cover the
 local display behavior, while scrollbar glyphs, clipping, capture chrome, and

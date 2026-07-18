@@ -1,5 +1,11 @@
 # EvenHub changelog
 
+## 0.4.4
+
+- Replace oversized G2 scrollbar glyphs with a narrow proportional `|` thumb
+  over an invisible track so the indicator does not clip or leave blocks beside
+  every feed line.
+
 ## 0.4.3
 
 - Keep the composer above the iOS keyboard by following the live visual
