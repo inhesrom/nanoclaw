@@ -194,7 +194,7 @@ describe('EvenHub deployment assets', () => {
       permissions: Array<{ name: string; whitelist?: string[] }>;
     };
     expect(packageJson.private).toBe(true);
-    expect(packageJson.version).toBe('0.4.2');
+    expect(packageJson.version).toBe('0.4.3');
     expect(packageJson.dependencies).toEqual({
       '@evenrealities/even_hub_sdk': '0.0.12',
       '@evenrealities/pretext': '0.1.4',

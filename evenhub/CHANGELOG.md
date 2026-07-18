@@ -1,5 +1,10 @@
 # EvenHub changelog
 
+## 0.4.3
+
+- Keep the composer above the iOS keyboard by following the live visual
+  viewport and allowing the conversation ledger to contract.
+
 ## 0.4.2
 
 - Add a proportional eight-row scrollbar beside the G2 conversation feed while

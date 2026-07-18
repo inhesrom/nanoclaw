@@ -89,6 +89,7 @@ async function cleanup(): Promise<void> {
   cleanedUp = true;
   await recorder.cancel();
   unsubscribe();
+  companion.dispose();
   thinkingStatus.dispose();
   controller.dispose();
 }

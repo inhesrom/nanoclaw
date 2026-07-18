@@ -14,6 +14,18 @@ export interface CompanionActions {
 
 export interface CompanionUi {
   render(state: AppState): void;
+  dispose(): void;
+}
+
+interface CssPropertyPort {
+  setProperty(name: string, value: string): void;
+}
+
+interface VisualViewportPort {
+  readonly height: number;
+  readonly offsetTop: number;
+  addEventListener(type: 'resize' | 'scroll', listener: () => void): void;
+  removeEventListener(type: 'resize' | 'scroll', listener: () => void): void;
 }
 
 const labels: Record<AppState['kind'], string> = {
@@ -101,6 +113,14 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
       });
   });
   message.addEventListener('input', syncComposer);
+  const stopViewportTracking = window.visualViewport
+    ? trackVisualViewport(root.style, window.visualViewport, () => {
+        if (document.activeElement !== message) return;
+        window.requestAnimationFrame(() => {
+          message.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        });
+      })
+    : () => undefined;
   root.addEventListener('click', (event) => {
     const action = (event.target as HTMLElement).closest<HTMLButtonElement>(
       'button[data-action]',
@@ -141,6 +161,26 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
       }
       previousKind = state.kind;
     },
+    dispose: stopViewportTracking,
+  };
+}
+
+export function trackVisualViewport(
+  style: CssPropertyPort,
+  viewport: VisualViewportPort,
+  onChange: () => void = () => undefined,
+): () => void {
+  const update = () => {
+    style.setProperty('--visual-viewport-height', `${viewport.height}px`);
+    style.setProperty('--visual-viewport-top', `${viewport.offsetTop}px`);
+    onChange();
+  };
+  viewport.addEventListener('resize', update);
+  viewport.addEventListener('scroll', update);
+  update();
+  return () => {
+    viewport.removeEventListener('resize', update);
+    viewport.removeEventListener('scroll', update);
   };
 }
 
@@ -282,9 +322,10 @@ const styles = `<style>
     font-synthesis: none;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; min-width: 280px; min-height: 100vh; background: radial-gradient(circle at 70% -10%, #26342f 0, #111816 36%, #080c0b 72%); }
+  html, body, #app { width: 100%; height: 100%; overflow: hidden; }
+  body { margin: 0; min-width: 280px; background: radial-gradient(circle at 70% -10%, #26342f 0, #111816 36%, #080c0b 72%); }
   button, input, textarea { font: inherit; }
-  .lens { min-height: 100vh; max-width: 760px; margin: 0 auto; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; }
+  .lens { height: 100vh; height: 100dvh; height: var(--visual-viewport-height, 100dvh); min-height: 0; max-width: 760px; margin: 0 auto; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; overflow: hidden; transform: translateY(var(--visual-viewport-top, 0)); }
   .connection { min-height: 76px; padding: 18px clamp(20px, 5vw, 42px); border-bottom: 1px solid #33413b; display: flex; align-items: center; justify-content: space-between; gap: 20px; background: rgba(8, 12, 11, .72); backdrop-filter: blur(14px); }
   .brand, .connection-state, .phase, .speaker, .utterance, .dock-label, .dock-status, .empty p, .empty strong { margin: 0; }
   .brand { color: #f4f7f4; font-weight: 760; letter-spacing: -.02em; }
@@ -293,7 +334,7 @@ const styles = `<style>
   .connection-state i { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #9ee8c7; box-shadow: 0 0 12px #74cfa7; }
   .ledger-wrap { min-height: 0; position: relative; display: grid; grid-template-columns: 44px 1fr; padding: 0 clamp(20px, 5vw, 42px); }
   .rail { border-right: 1px solid #34423c; }
-  .ledger { min-height: 180px; max-height: calc(100vh - 310px); overflow-y: auto; padding: 28px 0 72px 26px; scroll-behavior: smooth; overscroll-behavior: contain; }
+  .ledger { min-height: 0; max-height: none; overflow-y: auto; padding: 28px 0 72px 26px; scroll-behavior: smooth; overscroll-behavior: contain; }
   .signal { position: relative; padding: 0 0 30px; }
   .signal-dot { position: absolute; left: -31px; top: 4px; width: 9px; height: 9px; border: 2px solid #111816; border-radius: 50%; background: #7f948a; box-shadow: 0 0 0 1px #52645c; }
   .signal-nanoclaw .signal-dot { background: #b6f29d; box-shadow: 0 0 16px rgba(182, 242, 157, .4); }

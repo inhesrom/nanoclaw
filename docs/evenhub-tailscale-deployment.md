@@ -1,6 +1,6 @@
 # EvenHub private Tailscale deployment
 
-EvenHub 0.4.2 has one private application origin,
+EvenHub 0.4.3 has one private application origin,
 `https://<device>.<tailnet>.ts.net`. The concrete value is stored only in the
 owner's ignored build configuration and the installed backend environment; it
 must not be committed. Tailscale Serve terminates HTTPS on the Pi's tailnet
@@ -57,7 +57,7 @@ chmod 0600 .env.private
 npm test
 npm run pack:verify
 npm run pack:private
-sha256sum nanoclaw-evenhub-0.4.2.ehpk
+sha256sum nanoclaw-evenhub-0.4.3.ehpk
 ```
 
 The private packer requires mode `0600`, validates a canonical HTTPS `ts.net`

@@ -1,6 +1,6 @@
 # EvenHub streaming STT protocol v2
 
-EvenHub 0.4.2 requires `X-EvenHub-Protocol-Version: 2` on readiness and every
+EvenHub 0.4.3 requires `X-EvenHub-Protocol-Version: 2` on readiness and every
 authenticated STT/turn request. Missing or older versions receive
 `426 client_upgrade_required`; `/healthz` and pairing remain exempt. Host and
 plugin are released together and protocol 2 has no immediate-dispatch fallback.

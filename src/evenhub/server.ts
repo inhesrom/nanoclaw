@@ -36,7 +36,7 @@ const MAX_JSON_BYTES = 16 * 1024;
 const PAIR_FAILURE_LIMIT = 5;
 const PAIR_LOCK_MS = 15 * 60 * 1000;
 export const EVENHUB_PROTOCOL_VERSION = 2;
-export const EVENHUB_RELEASE_VERSION = '0.4.2';
+export const EVENHUB_RELEASE_VERSION = '0.4.3';
 export const MAX_EVENHUB_TEXT_CODE_POINTS = 2_000;
 
 export interface EvenTurnProcessor {
