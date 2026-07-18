@@ -16,7 +16,7 @@ const workspace = mkdtempSync(path.join(tmpdir(), 'nanoclaw-evenhub-private-'));
 try {
   const origin = readPrivateOrigin();
   const manifest = path.join(workspace, 'app.json');
-  const output = path.join(evenhubRoot, 'nanoclaw-evenhub-0.3.0.ehpk');
+  const output = path.join(evenhubRoot, 'nanoclaw-evenhub-0.3.1.ehpk');
   renderPrivateManifest(origin, manifest);
   buildPrivateClient(origin);
   packPrivateManifest(manifest, output);
