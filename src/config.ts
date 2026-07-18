@@ -12,6 +12,13 @@ const envConfig = readEnvFile([
   'ONECLI_URL',
   'TZ',
   'NANOCLAW_RUNTIME',
+  'EVENHUB_ENABLED',
+  'EVENHUB_HOST',
+  'EVENHUB_PORT',
+  'EVENHUB_PUBLIC_ORIGIN',
+  'EVENHUB_MAX_AUDIO_BYTES',
+  'EVENHUB_PAIRING_TTL_MS',
+  'EVENHUB_TURN_RETENTION_MS',
 ]);
 
 export const ASSISTANT_NAME =
@@ -42,6 +49,109 @@ export const SENDER_ALLOWLIST_PATH = path.join(
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
+
+export const EVENHUB_ENABLED =
+  (process.env.EVENHUB_ENABLED || envConfig.EVENHUB_ENABLED) === 'true';
+export const EVENHUB_HOST =
+  process.env.EVENHUB_HOST || envConfig.EVENHUB_HOST || '127.0.0.1';
+export const EVENHUB_PORT = parseInt(
+  process.env.EVENHUB_PORT || envConfig.EVENHUB_PORT || '18791',
+  10,
+);
+export const EVENHUB_PUBLIC_ORIGIN =
+  process.env.EVENHUB_PUBLIC_ORIGIN || envConfig.EVENHUB_PUBLIC_ORIGIN || '';
+// Fixed production boundary. Model/runtime selection lives in the tracked STT
+// profile consumed by the loopback service, not in NanoClaw's environment.
+export const EVENHUB_STT_URL = 'http://127.0.0.1:8178/v1/transcribe';
+export const EVENHUB_MAX_AUDIO_BYTES = parseInt(
+  process.env.EVENHUB_MAX_AUDIO_BYTES ||
+    envConfig.EVENHUB_MAX_AUDIO_BYTES ||
+    '960000',
+  10,
+);
+export const EVENHUB_PAIRING_TTL_MS = parseInt(
+  process.env.EVENHUB_PAIRING_TTL_MS ||
+    envConfig.EVENHUB_PAIRING_TTL_MS ||
+    '300000',
+  10,
+);
+export const EVENHUB_TURN_RETENTION_MS = parseInt(
+  process.env.EVENHUB_TURN_RETENTION_MS ||
+    envConfig.EVENHUB_TURN_RETENTION_MS ||
+    '604800000',
+  10,
+);
+
+export interface EvenHubRuntimeConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  publicOrigin: string;
+  sttUrl: string;
+  maxAudioBytes: number;
+  pairingTtlMs: number;
+  turnRetentionMs: number;
+}
+
+export const EVENHUB_RUNTIME_CONFIG: EvenHubRuntimeConfig = {
+  enabled: EVENHUB_ENABLED,
+  host: EVENHUB_HOST,
+  port: EVENHUB_PORT,
+  publicOrigin: EVENHUB_PUBLIC_ORIGIN,
+  sttUrl: EVENHUB_STT_URL,
+  maxAudioBytes: EVENHUB_MAX_AUDIO_BYTES,
+  pairingTtlMs: EVENHUB_PAIRING_TTL_MS,
+  turnRetentionMs: EVENHUB_TURN_RETENTION_MS,
+};
+
+const APPROVED_EVENHUB_CONFIG: Omit<
+  EvenHubRuntimeConfig,
+  'enabled' | 'publicOrigin'
+> = {
+  host: '127.0.0.1',
+  port: 18791,
+  sttUrl: 'http://127.0.0.1:8178/v1/transcribe',
+  maxAudioBytes: 960_000,
+  pairingTtlMs: 300_000,
+  turnRetentionMs: 604_800_000,
+};
+
+/** Fail closed when the private EvenHub boundary drifts from its reviewed shape. */
+export function validateEvenHubRuntimeConfig(
+  config: EvenHubRuntimeConfig = EVENHUB_RUNTIME_CONFIG,
+): void {
+  if (!config.enabled) return;
+
+  let publicUrl: URL;
+  try {
+    publicUrl = new URL(config.publicOrigin);
+  } catch (error) {
+    throw new Error(
+      'Invalid EvenHub configuration: publicOrigin must be a canonical HTTPS ts.net origin',
+      { cause: error },
+    );
+  }
+  if (
+    publicUrl.protocol !== 'https:' ||
+    publicUrl.port !== '' ||
+    publicUrl.origin !== config.publicOrigin ||
+    !publicUrl.hostname.endsWith('.ts.net') ||
+    publicUrl.hostname.split('.').length < 4
+  ) {
+    throw new Error(
+      'Invalid EvenHub configuration: publicOrigin must be a canonical HTTPS ts.net origin',
+    );
+  }
+
+  for (const [name, approved] of Object.entries(APPROVED_EVENHUB_CONFIG)) {
+    const actual = config[name as keyof typeof APPROVED_EVENHUB_CONFIG];
+    if (actual !== approved) {
+      throw new Error(
+        `Invalid EvenHub configuration: ${name} must be ${String(approved)}`,
+      );
+    }
+  }
+}
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';

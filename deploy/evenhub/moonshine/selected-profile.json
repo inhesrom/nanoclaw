@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "selectionStatus": "pending_physical_benchmark",
+  "provider": "moonshine",
+  "runtimeVersion": "0.0.69",
+  "runtimePath": "/opt/nanoclaw/moonshine-0.0.69",
+  "modelId": "moonshine-streaming-small-en",
+  "modelPath": "/var/lib/nanoclaw/stt/moonshine-streaming-small-en",
+  "modelArch": 4,
+  "modelArchitecture": "small-streaming",
+  "updateIntervalMs": 500,
+  "serviceEndpoint": "http://127.0.0.1:8178",
+  "components": [],
+  "evidence": null
+}

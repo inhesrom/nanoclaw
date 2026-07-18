@@ -744,6 +744,65 @@ describe('WhatsAppChannel', () => {
       // The queue should have the message
     });
 
+    it('confirms a raw self-chat prompt with its reserved message ID', async () => {
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+      await connectChannel(channel);
+      fakeSocket.sendMessage.mockResolvedValueOnce({
+        key: { id: '3EB0RESERVED' },
+        message: { conversation: 'raw transcript' },
+        messageTimestamp: 1_721_088_000,
+      });
+
+      await expect(
+        channel.sendSelfMessage(
+          '123@s.whatsapp.net',
+          'raw transcript',
+          '3EB0RESERVED',
+        ),
+      ).resolves.toEqual({
+        id: '3EB0RESERVED',
+        timestamp: '2024-07-16T00:00:00.000Z',
+      });
+      expect(fakeSocket.sendMessage).toHaveBeenLastCalledWith(
+        '123@s.whatsapp.net',
+        { text: 'raw transcript' },
+        { messageId: '3EB0RESERVED' },
+      );
+    });
+
+    it('requires a confirmed ID for correlated replies', async () => {
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+      await connectChannel(channel);
+      fakeSocket.sendMessage.mockResolvedValueOnce({
+        key: { id: 'reply-id' },
+        message: { conversation: 'Andy: exact answer' },
+        messageTimestamp: 1_721_088_000,
+      });
+
+      await expect(
+        channel.sendMessageConfirmed('123@s.whatsapp.net', 'exact answer'),
+      ).resolves.toMatchObject({ id: 'reply-id' });
+      expect(fakeSocket.sendMessage).toHaveBeenLastCalledWith(
+        '123@s.whatsapp.net',
+        { text: 'Andy: exact answer' },
+      );
+    });
+
+    it('does not queue a correlated send when disconnected', async () => {
+      const channel = new WhatsAppChannel(createTestOpts());
+
+      await expect(
+        channel.sendSelfMessage(
+          '123@s.whatsapp.net',
+          'raw transcript',
+          '3EB0RESERVED',
+        ),
+      ).rejects.toThrow('disconnected');
+      expect(fakeSocket.sendMessage).not.toHaveBeenCalled();
+    });
+
     it('flushes multiple queued messages in order', async () => {
       const opts = createTestOpts();
       const channel = new WhatsAppChannel(opts);

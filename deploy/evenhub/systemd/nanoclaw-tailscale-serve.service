@@ -1,0 +1,28 @@
+[Unit]
+Description=NanoClaw private Tailscale HTTPS boundary
+Wants=network-online.target
+Requires=tailscaled.service nanoclaw.service nanoclaw-moonshine.service nanoclaw-evenhub-firewall.service
+After=network-online.target tailscaled.service nanoclaw.service nanoclaw-moonshine.service nanoclaw-evenhub-firewall.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/tailscale serve --bg --https=443 http://127.0.0.1:18791
+ExecReload=/usr/bin/tailscale serve --bg --https=443 http://127.0.0.1:18791
+ExecStop=-/usr/bin/tailscale serve --https=443 off
+RemainAfterExit=yes
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
