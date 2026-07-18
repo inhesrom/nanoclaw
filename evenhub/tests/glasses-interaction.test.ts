@@ -14,7 +14,11 @@ import {
   THINKING_STATUS_INTERVAL_MS,
   ThinkingStatusAnimation,
 } from '../src/thinking-status';
-import { renderCompanionState } from '../src/ui';
+import {
+  limitComposerText,
+  renderCompanionState,
+  shouldClearComposer,
+} from '../src/ui';
 
 describe('CoalescingGlassesRenderer', () => {
   it('drops stale listening frames so captured state renders next', async () => {
@@ -35,11 +39,20 @@ describe('CoalescingGlassesRenderer', () => {
       onError: vi.fn(),
     });
 
-    renderer.render({ feed: 'You: live 0.1', status: 'Tap to stop' });
+    renderer.render({
+      feed: 'You: live 0.1',
+      scrollbar: '█\n│',
+      status: 'Tap to stop',
+    });
     await Promise.resolve();
-    renderer.render({ feed: 'You: live 0.2', status: 'Tap to stop' });
+    renderer.render({
+      feed: 'You: live 0.2',
+      scrollbar: '█\n│',
+      status: 'Tap to stop',
+    });
     renderer.render({
       feed: 'You: complete draft',
+      scrollbar: '│\n█',
       status: 'Transcribing…',
     });
 
@@ -49,6 +62,7 @@ describe('CoalescingGlassesRenderer', () => {
     expect(contents).toEqual([
       'You: live 0.1',
       'You: complete draft',
+      '│\n█',
       'Transcribing…',
     ]);
   });
@@ -68,7 +82,7 @@ describe('CoalescingGlassesRenderer', () => {
     });
 
     for (const status of THINKING_STATUS_FRAMES) {
-      renderer.render({ feed: 'You: complete draft', status });
+      renderer.render({ feed: 'You: complete draft', scrollbar: '', status });
       await renderer.waitForIdle();
     }
 
@@ -83,16 +97,44 @@ describe('CoalescingGlassesRenderer', () => {
         .map((item) => item.content),
     ).toEqual(THINKING_STATUS_FRAMES);
   });
+
+  it('diffs scrollbar and status updates without resending the feed', async () => {
+    const updates: Array<{ name?: string; content?: string }> = [];
+    const renderer = new CoalescingGlassesRenderer({
+      bridge: {
+        async textContainerUpgrade(update) {
+          updates.push({ name: update.containerName, content: update.content });
+        },
+      },
+      onError: vi.fn(),
+    });
+
+    renderer.render({ feed: 'same feed', scrollbar: '█\n│', status: 'First' });
+    await renderer.waitForIdle();
+    renderer.render({ feed: 'same feed', scrollbar: '│\n█', status: 'First' });
+    await renderer.waitForIdle();
+    renderer.render({ feed: 'same feed', scrollbar: '│\n█', status: 'Second' });
+    await renderer.waitForIdle();
+
+    expect(updates.filter((update) => update.name === 'feed')).toHaveLength(1);
+    expect(
+      updates.filter((update) => update.name === 'scrollbar'),
+    ).toHaveLength(2);
+    expect(updates.filter((update) => update.name === 'status')).toHaveLength(
+      2,
+    );
+  });
 });
 
 describe('G2 display', () => {
   it('creates a framed three-container stack with capture only on status', () => {
     const containers = createG2StartupContainers({
       feed: 'NanoClaw',
+      scrollbar: '',
       status: 'Tap to record',
     });
 
-    expect(containers).toHaveLength(3);
+    expect(containers).toHaveLength(4);
     expect(G2_FEED_LINES).toBe(8);
     expect(containers[0]).toMatchObject({
       xPosition: 2,
@@ -105,21 +147,30 @@ describe('G2 display', () => {
     });
     expect(containers[1]).toMatchObject({
       containerName: 'feed',
+      width: 552,
       height: 240,
       zOrderIndex: 2,
     });
     expect(containers[1].isEventCapture).toBeUndefined();
     expect(containers[2]).toMatchObject({
+      containerName: 'scrollbar',
+      xPosition: 552,
+      width: 24,
+      height: 240,
+      zOrderIndex: 3,
+    });
+    expect(containers[2].isEventCapture).toBeUndefined();
+    expect(containers[3]).toMatchObject({
       containerName: 'status',
       yPosition: 250,
       height: 30,
       isEventCapture: 1,
-      zOrderIndex: 3,
+      zOrderIndex: 4,
     });
     expect(containers.filter((item) => item.isEventCapture === 1)).toHaveLength(
       1,
     );
-    expect(new Set(containers.map((item) => item.zOrderIndex)).size).toBe(3);
+    expect(new Set(containers.map((item) => item.zOrderIndex)).size).toBe(4);
   });
 
   it('uses exact sentence-case status copy and contextual scroll arrows', () => {
@@ -128,14 +179,19 @@ describe('G2 display', () => {
     expect(contextualScrollHint(false, true)).toBe('Scroll ↓');
     expect(contextualScrollHint(true, true)).toBe('Scroll ↑↓');
 
-    expect(glassesView({ kind: 'ready', session: emptySession() }).status).toBe(
-      'Tap to record',
-    );
+    expect(
+      glassesView({
+        kind: 'ready',
+        capabilities: { voice: true, text: true },
+        session: emptySession(),
+      }).status,
+    ).toBe('Tap to record');
     expect(
       glassesView({
         kind: 'recording',
         startedAt: 1,
         bytes: 8_000,
+        capabilities: { voice: true, text: true },
         session: emptySession(),
       }).status,
     ).toBe('Tap to stop');
@@ -143,6 +199,7 @@ describe('G2 display', () => {
       glassesView({
         kind: 'stopping',
         finalText: 'complete draft',
+        capabilities: { voice: true, text: true },
         session: emptySession(),
       }).status,
     ).toBe('Transcribing…');
@@ -166,7 +223,11 @@ describe('G2 display', () => {
     const turn = { id: 'turn-1', idempotencyKey: 'key-1' };
     const states: Array<{ state: AppState; expectedStatus: string }> = [
       {
-        state: { kind: 'ready', session: emptySession() },
+        state: {
+          kind: 'ready',
+          capabilities: { voice: true, text: true },
+          session: emptySession(),
+        },
         expectedStatus: 'Tap to record',
       },
       {
@@ -260,7 +321,11 @@ describe('ThinkingStatusAnimation', () => {
 
 describe('handlePrimaryTap', () => {
   it('uses one tap to start and the next tap to stop recording', async () => {
-    const ready = createActions({ kind: 'ready', session: emptySession() });
+    const ready = createActions({
+      kind: 'ready',
+      capabilities: { voice: true, text: true },
+      session: emptySession(),
+    });
     await handlePrimaryTap(ready);
     expect(ready.recorder.start).toHaveBeenCalledOnce();
 
@@ -272,6 +337,18 @@ describe('handlePrimaryTap', () => {
     });
     await handlePrimaryTap(recording);
     expect(recording.recorder.finish).toHaveBeenCalledOnce();
+  });
+
+  it('does not open recording from a G2 tap when voice is unavailable', async () => {
+    const actions = createActions({
+      kind: 'ready',
+      capabilities: { voice: false, text: true },
+      session: emptySession(),
+    });
+
+    await handlePrimaryTap(actions);
+
+    expect(actions.recorder.start).not.toHaveBeenCalled();
   });
 
   it('does not expose confirmation before the final server transcript', async () => {
@@ -301,6 +378,19 @@ describe('handlePrimaryTap', () => {
 });
 
 describe('companion conversation ledger', () => {
+  it('limits composer text by Unicode code point rather than UTF-16 units', () => {
+    expect(limitComposerText(`a${'👓'.repeat(2_000)}z`)).toBe(
+      `a${'👓'.repeat(1_999)}`,
+    );
+    expect([...limitComposerText('👓'.repeat(2_001))]).toHaveLength(2_000);
+  });
+
+  it('clears a draft only after host acknowledgement, not submission failure', () => {
+    expect(shouldClearComposer('submitting_text', 'thinking')).toBe(true);
+    expect(shouldClearComposer('submitting_text', 'ready')).toBe(true);
+    expect(shouldClearComposer('submitting_text', 'error')).toBe(false);
+  });
+
   it('renders chronological You and NanoClaw signals without page counters', () => {
     const html = renderCompanionState({
       kind: 'ready',
@@ -333,6 +423,27 @@ describe('companion conversation ledger', () => {
     expect(html).toContain('data-action="send"');
     expect(html).toContain('data-action="discard"');
     expect(html).toContain('Nothing has been sent');
+  });
+
+  it('shows a multiline composer after pairing and disables it while busy', () => {
+    const ready = renderCompanionState({
+      kind: 'ready',
+      capabilities: { voice: false, text: true },
+      session: emptySession(),
+    });
+    expect(ready).toContain('placeholder="Type a message…"');
+    expect(ready).toContain('<textarea rows="3"');
+    expect(ready).not.toContain('<textarea rows="3" disabled');
+
+    const busy = renderCompanionState({
+      kind: 'submitting_text',
+      idempotencyKey: 'key-text',
+      text: 'hello',
+      capabilities: { voice: false, text: true },
+      session: emptySession(),
+    });
+    expect(busy).toContain('placeholder="Type a message…" disabled');
+    expect(busy).toContain('Sending…');
   });
 });
 

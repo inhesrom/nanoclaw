@@ -8,7 +8,11 @@ import {
 
 describe('EvenHub app reducer', () => {
   it('opens final draft review on Send before entering thinking', () => {
-    const ready = reduceAppState(initialState, {
+    const capable = reduceAppState(initialState, {
+      type: 'CAPABILITIES_UPDATED',
+      capabilities: { voice: true, text: true },
+    });
+    const ready = reduceAppState(capable, {
       type: 'RESTORED',
       hasToken: true,
     });
@@ -76,7 +80,11 @@ describe('EvenHub app reducer', () => {
   });
 
   it('carries live transcript snapshots through immediate stop feedback', () => {
-    const ready = reduceAppState(initialState, {
+    const capable = reduceAppState(initialState, {
+      type: 'CAPABILITIES_UPDATED',
+      capabilities: { voice: true, text: true },
+    });
+    const ready = reduceAppState(capable, {
       type: 'RESTORED',
       hasToken: true,
     });
@@ -139,6 +147,44 @@ describe('EvenHub app reducer', () => {
       reduceAppState(completed, { type: 'SCROLLED', offset: 4 }),
     ).toMatchObject({
       session: { scrollOffset: 4, manuallyScrolled: true },
+    });
+  });
+
+  it('shows a typed prompt during submission and bypasses voice review', () => {
+    const capable = reduceAppState(initialState, {
+      type: 'CAPABILITIES_UPDATED',
+      capabilities: { voice: false, text: true },
+    });
+    const ready = reduceAppState(capable, {
+      type: 'RESTORED',
+      hasToken: true,
+    });
+    const submitting = reduceAppState(ready, {
+      type: 'TEXT_SUBMIT_STARTED',
+      idempotencyKey: 'key-text',
+      text: 'first line\nsecond line',
+    });
+    expect(submitting.kind).toBe('submitting_text');
+    expect(conversationEntries(submitting).at(-1)).toMatchObject({
+      speaker: 'You',
+      text: 'first line\nsecond line',
+    });
+
+    const acknowledged = reduceAppState(submitting, {
+      type: 'TEXT_ACCEPTED',
+      turn: { id: 'turn-text', idempotencyKey: 'key-text' },
+      result: {
+        turnId: 'turn-text',
+        state: 'dispatching',
+        transcript: 'first line\nsecond line',
+        createdAt: 'now',
+        updatedAt: 'now',
+        pollAfterMs: 500,
+      },
+    });
+    expect(acknowledged).toMatchObject({
+      kind: 'thinking',
+      transcript: 'first line\nsecond line',
     });
   });
 });

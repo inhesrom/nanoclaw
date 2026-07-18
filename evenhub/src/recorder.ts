@@ -54,12 +54,17 @@ export class G2Recorder {
   }
 
   async start(): Promise<void> {
-    if (this.options.controller.state.kind !== 'ready') return;
+    if (
+      this.options.controller.state.kind !== 'ready' ||
+      !this.options.controller.state.capabilities?.voice
+    ) {
+      return;
+    }
     this.chunks = [];
     this.bytes = 0;
     this.reportedTenth = -1;
     this.stopping = false;
-    this.options.controller.startRecording();
+    if (!this.options.controller.startRecording()) return;
     try {
       const opened = await this.options.bridge.audioControl(
         true,

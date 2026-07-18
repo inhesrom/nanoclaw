@@ -32,8 +32,10 @@ describe('G2Recorder', () => {
     const controller = new TurnController({
       api: {
         checkReady: vi.fn(async () => undefined),
+        getCapabilities: availableCapabilities,
         pair: vi.fn(),
         submitTurn: vi.fn(),
+        submitTextTurn: vi.fn(),
         startLiveTurn,
         getTurn: vi.fn(),
         confirmTurn: vi.fn(),
@@ -91,8 +93,10 @@ describe('G2Recorder', () => {
     const controller = new TurnController({
       api: {
         checkReady: vi.fn(async () => undefined),
+        getCapabilities: availableCapabilities,
         pair: vi.fn(),
         submitTurn,
+        submitTextTurn: vi.fn(),
         getTurn: vi.fn(),
         confirmTurn: vi.fn(),
       },
@@ -140,8 +144,10 @@ describe('G2Recorder', () => {
     const controller = new TurnController({
       api: {
         checkReady: vi.fn(async () => undefined),
+        getCapabilities: availableCapabilities,
         pair: vi.fn(),
         submitTurn: vi.fn(),
+        submitTextTurn: vi.fn(),
         startLiveTurn: () => ({ push: vi.fn(), finish: vi.fn(), abort }),
         getTurn: vi.fn(),
         confirmTurn: vi.fn(),
@@ -179,6 +185,14 @@ describe('G2Recorder', () => {
     expect(abort).toHaveBeenCalledOnce();
   });
 });
+
+async function availableCapabilities() {
+  return {
+    protocolVersion: 2 as const,
+    capabilities: { voice: true, text: true },
+    unavailable: { voice: [], text: [] },
+  };
+}
 
 describe('routeHubInteraction', () => {
   it('treats a captured text-container click as the primary tap', () => {

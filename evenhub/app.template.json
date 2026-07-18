@@ -2,7 +2,7 @@
   "package_id": "dev.inhesrom.nanoclaw.evenhub",
   "edition": "202601",
   "name": "NanoClaw",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "min_app_version": "2.0.0",
   "min_sdk_version": "0.0.12",
   "entrypoint": "index.html",
@@ -13,7 +13,7 @@
     },
     {
       "name": "network",
-      "desc": "Send voice turns to NanoClaw through the private tailnet.",
+      "desc": "Send voice or typed turns to NanoClaw through the private tailnet.",
       "whitelist": [
         "https://nanoclaw.example.ts.net",
         "wss://nanoclaw.example.ts.net"

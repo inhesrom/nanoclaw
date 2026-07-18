@@ -1,5 +1,17 @@
 # EvenHub changelog
 
+## 0.4.2
+
+- Add a proportional eight-row scrollbar beside the G2 conversation feed while
+  preserving contextual arrow hints and status-only thinking updates.
+- Add a persistent multiline phone composer with exact Unicode text delivery,
+  a 2,000-code-point limit, immediate `You` feedback, and idempotent retry.
+- Advertise voice and text capabilities independently so typed messages remain
+  available when speech recognition is down and unavailable voice cannot open
+  the G2 microphone.
+- Store typed prompts as durable, directly dispatching text turns without audio
+  files or voice confirmation while retaining the shared reply lifecycle.
+
 ## 0.4.1
 
 - Open the G2 confirmation strip automatically only after the host returns the

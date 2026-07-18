@@ -140,6 +140,43 @@ describe('EvenHubWhatsAppBridge', () => {
     );
   });
 
+  it('delivers a typed multiline prompt without changing its text', async () => {
+    const timestamp = '2026-07-16T00:00:00.000Z';
+    const prompt = 'keep café 👓\nsecond line';
+    insertEvenTurn({
+      id: 'turn-text',
+      device_id: 'device-1',
+      idempotency_key: 'key-turn-text',
+      request_sha256: createHash('sha256').update(prompt).digest('hex'),
+      input_kind: 'text',
+      audio_path: 'text:turn-text',
+      audio_duration_ms: 0,
+      state: 'dispatching',
+      confirmation_decision: 'send',
+      transcript: prompt,
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+    const sendSelfMessage = vi.fn(async (_jid, _text, messageId) => ({
+      id: messageId,
+      timestamp: '2026-07-16T00:00:01.000Z',
+    }));
+    const bridge = new EvenHubWhatsAppBridge({
+      getTarget: () => target({ sendSelfMessage }),
+      createMessageId: () => '3EB0TEXT',
+      logger: silentLogger,
+    });
+
+    bridge.start();
+    await bridge.waitForIdle();
+
+    expect(sendSelfMessage).toHaveBeenCalledWith(
+      '123@s.whatsapp.net',
+      prompt,
+      '3EB0TEXT',
+    );
+  });
+
   it('recovers a locally stored prompt without relaying it again', async () => {
     dispatchingTurn('turn-stored');
     reserveEvenTurnWhatsAppMessage('turn-stored', '3EB0STORED');

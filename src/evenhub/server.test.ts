@@ -160,7 +160,7 @@ describe('EvenHub LAN API', () => {
 
   it('reports approved health metadata and gates uploads on readiness', async () => {
     let dependencies = {
-      database: 'up' as const,
+      database: 'up' as 'up' | 'down',
       stt: 'down' as 'up' | 'down',
       whatsapp: 'down' as 'up' | 'down',
     };
@@ -206,7 +206,55 @@ describe('EvenHub LAN API', () => {
       },
     });
 
+    const capabilities = await server.inject({
+      method: 'GET',
+      pathname: '/api/even/v1/capabilities',
+      headers: protocolHeader(),
+    });
+    expect(capabilities).toMatchObject({
+      status: 200,
+      body: {
+        protocolVersion: 2,
+        capabilities: { voice: false, text: false },
+        unavailable: {
+          voice: ['stt', 'whatsapp'],
+          text: ['whatsapp'],
+        },
+      },
+    });
+
+    dependencies = { database: 'up', stt: 'down', whatsapp: 'up' };
+    expect(
+      await server.inject({
+        method: 'GET',
+        pathname: '/api/even/v1/capabilities',
+        headers: protocolHeader(),
+      }),
+    ).toMatchObject({
+      status: 200,
+      body: {
+        capabilities: { voice: false, text: true },
+        unavailable: { voice: ['stt'], text: [] },
+      },
+    });
+
+    dependencies = { database: 'down', stt: 'up', whatsapp: 'up' };
+    expect(
+      await server.inject({
+        method: 'GET',
+        pathname: '/api/even/v1/capabilities',
+        headers: protocolHeader(),
+      }),
+    ).toMatchObject({
+      status: 200,
+      body: {
+        capabilities: { voice: false, text: false },
+        unavailable: { voice: ['database'], text: ['database'] },
+      },
+    });
+
     const token = await pair();
+    dependencies = { database: 'up', stt: 'down', whatsapp: 'up' };
     const rejected = await server.inject({
       method: 'POST',
       pathname: '/api/even/v1/turns',
@@ -225,6 +273,20 @@ describe('EvenHub LAN API', () => {
     });
     expect(fs.readdirSync(audioDir)).toHaveLength(0);
 
+    const typed = await server.inject({
+      method: 'POST',
+      pathname: '/api/even/v1/text-turns',
+      headers: {
+        ...protocolAuth(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ idempotencyKey: randomUUID(), text: 'typed' }),
+    });
+    expect(typed).toMatchObject({
+      status: 201,
+      body: { state: 'dispatching', transcript: 'typed' },
+    });
+
     dependencies = { database: 'up', stt: 'up', whatsapp: 'up' };
     const ready = await server.inject({
       method: 'GET',
@@ -238,6 +300,118 @@ describe('EvenHub LAN API', () => {
         components: ['api', 'database', 'stt', 'whatsapp'],
         protocolVersion: 2,
       },
+    });
+  });
+
+  it('creates normalized text turns directly in dispatching and replays them exactly once', async () => {
+    const token = await pair();
+    const idempotencyKey = randomUUID();
+    const request = {
+      method: 'POST',
+      pathname: '/api/even/v1/text-turns',
+      headers: {
+        ...protocolAuth(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        idempotencyKey,
+        text: '  keep café 👓\r\nsecond line  ',
+      }),
+    };
+
+    const created = await server.inject(request);
+    expect(created).toMatchObject({
+      status: 201,
+      body: {
+        state: 'dispatching',
+        transcript: 'keep café 👓\nsecond line',
+      },
+    });
+    const { turnId } = created.body as { turnId: string };
+    expect(getEvenTurnById(turnId)).toMatchObject({
+      input_kind: 'text',
+      audio_path: `text:${turnId}`,
+      audio_duration_ms: 0,
+      state: 'dispatching',
+      confirmation_decision: 'send',
+      transcript: 'keep café 👓\nsecond line',
+    });
+    expect(dispatchWakes).toBe(1);
+    expect(fs.readdirSync(audioDir)).toHaveLength(0);
+
+    const replay = await server.inject(request);
+    expect(replay.status).toBe(200);
+    expect(replay.headers['Idempotency-Replayed']).toBe('true');
+    expect(replay.body).toMatchObject({ turnId, state: 'dispatching' });
+    expect(dispatchWakes).toBe(1);
+
+    const mismatch = await server.inject({
+      ...request,
+      body: JSON.stringify({ idempotencyKey, text: 'different' }),
+    });
+    expect(mismatch).toMatchObject({
+      status: 409,
+      body: { error: { code: 'idempotency_payload_mismatch' } },
+    });
+  });
+
+  it('authenticates, protocol-gates, and validates typed prompts by Unicode code point', async () => {
+    const token = await pair();
+    const body = JSON.stringify({ idempotencyKey: randomUUID(), text: 'hi' });
+    const unauthenticated = await server.inject({
+      method: 'POST',
+      pathname: '/api/even/v1/text-turns',
+      headers: {
+        'Content-Type': 'application/json',
+        ...protocolHeader(),
+      },
+      body,
+    });
+    expect(unauthenticated.status).toBe(401);
+
+    const oldClient = await server.inject({
+      method: 'POST',
+      pathname: '/api/even/v1/text-turns',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-EvenHub-Protocol-Version': '1',
+      },
+      body,
+    });
+    expect(oldClient.status).toBe(426);
+
+    for (const text of ['', ' \r\n ']) {
+      const blank = await server.inject({
+        method: 'POST',
+        pathname: '/api/even/v1/text-turns',
+        headers: {
+          ...protocolAuth(token),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ idempotencyKey: randomUUID(), text }),
+      });
+      expect(blank).toMatchObject({
+        status: 400,
+        body: { error: { code: 'invalid_text' } },
+      });
+    }
+
+    const tooLong = await server.inject({
+      method: 'POST',
+      pathname: '/api/even/v1/text-turns',
+      headers: {
+        ...protocolAuth(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        idempotencyKey: randomUUID(),
+        text: '👓'.repeat(2_001),
+      }),
+    });
+    expect(tooLong).toMatchObject({
+      status: 413,
+      body: { error: { code: 'text_too_long' } },
     });
   });
 
@@ -378,9 +552,9 @@ describe('EvenHub LAN API', () => {
     });
     expect(health).toMatchObject({
       status: 200,
-      body: { version: '0.4.1' },
+      body: { version: '0.4.2' },
     });
-    expect(EVENHUB_RELEASE_VERSION).toBe('0.4.1');
+    expect(EVENHUB_RELEASE_VERSION).toBe('0.4.2');
     const token = await pair();
 
     const oldReady = await server.inject({
@@ -392,6 +566,12 @@ describe('EvenHub LAN API', () => {
       status: 426,
       body: { error: { code: 'client_upgrade_required' } },
     });
+    const oldCapabilities = await server.inject({
+      method: 'GET',
+      pathname: '/api/even/v1/capabilities',
+      headers: { 'X-EvenHub-Protocol-Version': '1' },
+    });
+    expect(oldCapabilities.status).toBe(426);
     const oldTurn = await server.inject({
       method: 'POST',
       pathname: '/api/even/v1/turns',

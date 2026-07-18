@@ -126,6 +126,7 @@ function createSchema(database: Database.Database): void {
       device_id TEXT NOT NULL,
       idempotency_key TEXT NOT NULL,
       request_sha256 TEXT NOT NULL,
+      input_kind TEXT NOT NULL DEFAULT 'audio',
       audio_path TEXT NOT NULL UNIQUE,
       audio_duration_ms INTEGER NOT NULL,
       state TEXT NOT NULL,
@@ -293,6 +294,13 @@ function createSchema(database: Database.Database): void {
   try {
     database.exec(
       `ALTER TABLE even_turns ADD COLUMN confirmation_decision TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE even_turns ADD COLUMN input_kind TEXT NOT NULL DEFAULT 'audio'`,
     );
   } catch {
     /* column already exists */
@@ -1042,22 +1050,29 @@ export type NewEvenTurn = Pick<
   | 'state'
   | 'created_at'
   | 'updated_at'
->;
+> &
+  Partial<
+    Pick<EvenTurn, 'input_kind' | 'confirmation_decision' | 'transcript'>
+  >;
 
 export function insertEvenTurn(turn: NewEvenTurn): void {
   db.prepare(
     `INSERT INTO even_turns
-       (id, device_id, idempotency_key, request_sha256, audio_path,
-        audio_duration_ms, state, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, device_id, idempotency_key, request_sha256, input_kind, audio_path,
+        audio_duration_ms, state, confirmation_decision, transcript,
+        created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     turn.id,
     turn.device_id,
     turn.idempotency_key,
     turn.request_sha256,
+    turn.input_kind ?? 'audio',
     turn.audio_path,
     turn.audio_duration_ms,
     turn.state,
+    turn.confirmation_decision ?? null,
+    turn.transcript ?? null,
     turn.created_at,
     turn.updated_at,
   );
@@ -1210,7 +1225,7 @@ export function reconcileEvenSttTurns(): number {
     .prepare(
       `UPDATE even_turns
        SET state = 'accepted', updated_at = ?
-       WHERE state = 'transcribing'`,
+       WHERE state = 'transcribing' AND input_kind = 'audio'`,
     )
     .run(now).changes;
 }
@@ -1220,7 +1235,7 @@ export function claimNextAcceptedEvenTurn(): EvenTurn | undefined {
     const candidate = db
       .prepare(
         `SELECT id FROM even_turns
-         WHERE state = 'accepted'
+         WHERE state = 'accepted' AND input_kind = 'audio'
          ORDER BY created_at ASC, id ASC
          LIMIT 1`,
       )
@@ -1384,7 +1399,9 @@ export function deleteExpiredEvenTurn(id: string, cutoff: string): boolean {
 
 export function getReferencedEvenAudioPaths(): string[] {
   return (
-    db.prepare('SELECT audio_path FROM even_turns').all() as Array<{
+    db
+      .prepare("SELECT audio_path FROM even_turns WHERE input_kind = 'audio'")
+      .all() as Array<{
       audio_path: string;
     }>
   ).map((row) => row.audio_path);

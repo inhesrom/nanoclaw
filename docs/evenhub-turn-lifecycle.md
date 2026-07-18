@@ -1,11 +1,12 @@
-# EvenHub confirmed turn lifecycle
+# EvenHub durable turn lifecycle
 
-EvenHub 0.4.1 uses one durable lifecycle:
+EvenHub 0.4.2 uses one durable lifecycle with two input paths:
 
 ```text
-recording → transcribing → awaiting_confirmation
-                               ├─ Send → dispatching → queued → running → completed
-                               └─ Try again → discarded
+voice: recording → transcribing → awaiting_confirmation
+                                     ├─ Send → dispatching → queued → running → completed
+                                     └─ Try again → discarded
+text:  phone Send ─────────────────→ dispatching → queued → running → completed
 ```
 
 `failed` is terminal from transcription, dispatch, queue, or agent execution.
@@ -13,6 +14,18 @@ Live partial speech transcripts are display-only. Streaming and fallback STT
 persist the normalized final text as a draft transcript in
 `awaiting_confirmation`, delete PCM, and stop. A timeout, restart, lost
 response, or network failure never advances the turn.
+
+Typed prompts use authenticated `POST /api/even/v1/text-turns`. The host
+normalizes CRLF, trims surrounding whitespace, enforces a 2,000-Unicode-code-
+point limit, and creates a text turn directly in `dispatching` with decision
+`send`. The UUIDv4 idempotency key and normalized text make a lost response safe
+to replay; key reuse with different content fails with
+`409 idempotency_payload_mismatch`. Typed turns use duration zero and a
+`text:<turnId>` legacy path sentinel, which cleanup never treats as a file.
+
+`GET /api/even/v1/capabilities` reports voice and text separately. Voice needs
+database, STT, and WhatsApp; text needs only database and WhatsApp. `/readyz`
+continues to require every dependency.
 
 ## Confirmation boundary
 
@@ -36,8 +49,8 @@ wins.
 
 ## Prompt correlation
 
-Only a confirmed `send` wakes the WhatsApp bridge. The coordinator processes
-one G2 prompt at a time:
+Only a confirmed voice `send` or explicit phone composer `Send` wakes the
+WhatsApp bridge. The coordinator processes one EvenHub prompt at a time:
 
 1. Reserve a Baileys-compatible message ID while the turn is `dispatching`.
 2. Send the draft transcript to the registered WhatsApp self-chat with that ID.
@@ -66,4 +79,4 @@ prompts, or replies.
 Awaiting-confirmation, discarded, completed, and failed turns remain readable
 for seven days by default. Daily cleanup removes expired rows and unreferenced
 `.part`, `.tmp`, or `.pcm` files older than one hour. STT removes a turn's PCM
-as soon as its draft is persisted.
+as soon as its draft is persisted. Text turns never create audio files.

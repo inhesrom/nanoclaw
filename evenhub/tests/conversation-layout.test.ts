@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   anchorConversationEntry,
   projectConversationFeed,
+  projectConversationScrollbar,
   scrollConversation,
 } from '../src/conversation-layout';
 
@@ -75,5 +76,51 @@ describe('conversation feed layout', () => {
     expect(anchorConversationEntry(long, 'reply')).toBe(
       long.ranges.reply.start,
     );
+  });
+
+  it('hides a fitting scrollbar and sizes overflowing thumbs proportionally', () => {
+    const fitting = projectConversationFeed([
+      { id: 'short', speaker: 'You', text: 'short' },
+    ]);
+    expect(projectConversationScrollbar(fitting)).toBe('');
+
+    const sixteenLines = {
+      lines: new Array(16).fill('line'),
+      offset: 0,
+      maxOffset: 8,
+    };
+    expect(projectConversationScrollbar(sixteenLines).split('\n')).toEqual([
+      '█',
+      '█',
+      '█',
+      '█',
+      '│',
+      '│',
+      '│',
+      '│',
+    ]);
+    const thirtyTwoLines = {
+      lines: new Array(32).fill('line'),
+      offset: 0,
+      maxOffset: 24,
+    };
+    expect(
+      projectConversationScrollbar(thirtyTwoLines)
+        .split('\n')
+        .filter((glyph) => glyph === '█'),
+    ).toHaveLength(2);
+  });
+
+  it('maps scrollbar thumbs to the top, middle, and bottom of the track', () => {
+    const projection = { lines: new Array(16).fill('line'), maxOffset: 8 };
+    expect(
+      projectConversationScrollbar({ ...projection, offset: 0 }).split('\n'),
+    ).toEqual(['█', '█', '█', '█', '│', '│', '│', '│']);
+    expect(
+      projectConversationScrollbar({ ...projection, offset: 4 }).split('\n'),
+    ).toEqual(['│', '│', '█', '█', '█', '█', '│', '│']);
+    expect(
+      projectConversationScrollbar({ ...projection, offset: 8 }).split('\n'),
+    ).toEqual(['│', '│', '│', '│', '█', '█', '█', '█']);
   });
 });

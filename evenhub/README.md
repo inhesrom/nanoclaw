@@ -1,12 +1,13 @@
 # NanoClaw EvenHub plugin
 
-Private Tailscale voice bridge for Even G2. Tap once to stream retained PCM
-s16le at 16 kHz mono to local Moonshine and tap again to stop. Review the
-complete draft transcript, then explicitly choose `Send` or `Try again` on the
-G2 or companion. Replies join a continuous, four-lines-per-swipe conversation
-feed instead of answer pages. A streaming failure submits the same complete PCM
-with the same idempotency key through the tailnet API and still stops for
-confirmation.
+Private Tailscale conversation bridge for Even G2. Tap once to stream retained
+PCM s16le at 16 kHz mono to local Moonshine and tap again to stop, or use the
+multiline phone composer when typing is more convenient. Voice drafts still
+require explicit `Send` or `Try again`; pressing the phone composer `Send`
+button dispatches typed text immediately. Both inputs and replies share one
+continuous, four-lines-per-swipe conversation feed with a proportional G2
+scrollbar. Text remains available when Moonshine is down as long as the database
+and WhatsApp are healthy.
 
 See the [changelog](CHANGELOG.md) for release notes.
 
@@ -35,5 +36,8 @@ retained diagnostic endpoint is covered by the
 failure semantics are in the
 [streaming protocol](../docs/evenhub-streaming-protocol.md).
 
-Protocol 2 requires host and plugin version 0.4.1 together. Older clients receive
-`426 client_upgrade_required` before audio is accepted.
+Protocol 2 requires host and plugin version 0.4.2 together. Older clients receive
+`426 client_upgrade_required` before audio or text is accepted. The installed
+EvenHub simulator is unavailable on Linux arm64; projection tests cover the
+local display behavior, while scrollbar glyphs, clipping, capture chrome, and
+gestures remain a physical-G2 release check.

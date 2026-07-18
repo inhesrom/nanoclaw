@@ -41,11 +41,21 @@ const completedTurn: ServerTurn = {
 function api(overrides: Partial<EvenHubApiPort> = {}): EvenHubApiPort {
   return {
     async checkReady(): Promise<void> {},
+    async getCapabilities() {
+      return {
+        protocolVersion: 2 as const,
+        capabilities: { voice: true, text: true },
+        unavailable: { voice: [], text: [] },
+      };
+    },
     async pair(): Promise<PairResult> {
       return { deviceId: 'device-1', token: 'token' };
     },
     async submitTurn(): Promise<ServerTurn> {
       return draftTurn;
+    },
+    async submitTextTurn(): Promise<ServerTurn> {
+      return { ...draftTurn, state: 'dispatching' };
     },
     async getTurn(): Promise<ServerTurn> {
       return draftTurn;
@@ -63,7 +73,7 @@ describe('TurnController', () => {
   it('blocks recording until private-host readiness succeeds on retry', async () => {
     const storage = new MemoryStorage(new Map([[STORAGE_KEYS.token, 'token']]));
     let connected = false;
-    const checkReady = vi.fn(async () => {
+    const getCapabilities = vi.fn(async () => {
       if (!connected) {
         throw new EvenHubApiError(
           0,
@@ -72,9 +82,14 @@ describe('TurnController', () => {
           true,
         );
       }
+      return {
+        protocolVersion: 2 as const,
+        capabilities: { voice: true, text: true },
+        unavailable: { voice: [], text: [] },
+      };
     });
     const controller = new TurnController({
-      api: api({ checkReady }),
+      api: api({ getCapabilities }),
       storage,
       onState: () => undefined,
     });
@@ -87,6 +102,111 @@ describe('TurnController', () => {
     connected = true;
     await controller.retry();
     expect(controller.state.kind).toBe('ready');
+  });
+
+  it('keeps text available while STT is down and refuses to start G2 recording', async () => {
+    const startLiveTurn = vi.fn();
+    const prompt = 'keep café 👓\nsecond line';
+    const submitTextTurn = vi.fn(async () => ({
+      ...draftTurn,
+      state: 'dispatching' as const,
+      transcript: prompt,
+    }));
+    const getTurn = vi.fn(async () => ({
+      ...completedTurn,
+      transcript: prompt,
+    }));
+    const controller = new TurnController({
+      api: api({
+        getCapabilities: async () => ({
+          protocolVersion: 2,
+          capabilities: { voice: false, text: true },
+          unavailable: { voice: ['stt'], text: [] },
+        }),
+        startLiveTurn,
+        submitTextTurn,
+        getTurn,
+      }),
+      storage: tokenStorage(),
+      onState: () => undefined,
+      delay: async () => undefined,
+      createIdempotencyKey: () => 'text-key',
+    });
+    await controller.boot();
+
+    expect(controller.startRecording()).toBe(false);
+    expect(startLiveTurn).not.toHaveBeenCalled();
+    expect(controller.state.kind).toBe('ready');
+    await expect(controller.submitText(prompt)).resolves.toBe(true);
+    await waitForState(controller, 'ready');
+
+    expect(submitTextTurn).toHaveBeenCalledWith('token', prompt, 'text-key');
+    expect(controller.state.session.turns).toEqual([
+      {
+        turnId: 'turn-1',
+        transcript: prompt,
+        reply: 'Exact café answer 👓 — unchanged',
+      },
+    ]);
+  });
+
+  it('shows Sending immediately and reuses retained text and key after submission failure', async () => {
+    const prompt = 'first line\nsecond line';
+    let releaseAcknowledgement!: () => void;
+    const acknowledgement = new Promise<void>((resolve) => {
+      releaseAcknowledgement = resolve;
+    });
+    let attempts = 0;
+    const submitTextTurn = vi.fn(async () => {
+      attempts += 1;
+      if (attempts <= 4) {
+        throw new EvenHubApiError(
+          503,
+          'text_unavailable',
+          'Text unavailable.',
+          true,
+        );
+      }
+      await acknowledgement;
+      return {
+        ...draftTurn,
+        state: 'dispatching' as const,
+        transcript: prompt,
+      };
+    });
+    const controller = new TurnController({
+      api: api({
+        submitTextTurn,
+        getTurn: async () => ({ ...completedTurn, transcript: prompt }),
+      }),
+      storage: tokenStorage(),
+      onState: () => undefined,
+      delay: async () => undefined,
+      createIdempotencyKey: () => 'retained-key',
+    });
+    await controller.boot();
+
+    await expect(controller.submitText(`  ${prompt}\r\n  `)).resolves.toBe(
+      false,
+    );
+    expect(controller.state).toMatchObject({
+      kind: 'error',
+      message: 'Text unavailable.',
+      retryable: true,
+    });
+    const retrying = controller.retry();
+    expect(controller.state).toMatchObject({
+      kind: 'submitting_text',
+      text: prompt,
+    });
+    releaseAcknowledgement();
+    await retrying;
+    await waitForState(controller, 'ready');
+
+    expect(submitTextTurn).toHaveBeenCalledTimes(5);
+    for (const call of submitTextTurn.mock.calls) {
+      expect(call).toEqual(['token', prompt, 'retained-key']);
+    }
   });
 
   it('restores an unresolved draft after reload and stops polling for a decision', async () => {

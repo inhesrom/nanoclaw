@@ -10,6 +10,7 @@ import {
   _initTestDatabase,
   activateEvenDeviceFromPairingCode,
   getEvenTurnById,
+  getReferencedEvenAudioPaths,
   insertEvenTurn,
   replaceEvenPairingCode,
 } from '../db.js';
@@ -116,5 +117,31 @@ describe('cleanupEvenHubStorage', () => {
     expect(getEvenTurnById('recent-draft')?.state).toBe(
       'awaiting_confirmation',
     );
+  });
+
+  it('expires text turns without treating their sentinel as an audio path', () => {
+    insertEvenTurn({
+      id: 'typed',
+      device_id: 'device-1',
+      idempotency_key: 'key-typed',
+      request_sha256: createHash('sha256').update('hello').digest('hex'),
+      input_kind: 'text',
+      audio_path: 'text:typed',
+      audio_duration_ms: 0,
+      state: 'completed',
+      confirmation_decision: 'send',
+      transcript: 'hello',
+      created_at: '2026-07-08T00:00:00.000Z',
+      updated_at: '2026-07-08T00:00:00.000Z',
+    });
+
+    expect(getReferencedEvenAudioPaths()).not.toContain('text:typed');
+    expect(
+      cleanupEvenHubStorage(audioDir, 7 * DAY_MS, {
+        now: new Date('2026-07-16T12:00:00.000Z'),
+        logger: { info: vi.fn(), warn: vi.fn() },
+      }),
+    ).toMatchObject({ expiredTurns: 1 });
+    expect(getEvenTurnById('typed')).toBeUndefined();
   });
 });

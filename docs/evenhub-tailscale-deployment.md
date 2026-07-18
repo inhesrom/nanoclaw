@@ -1,6 +1,6 @@
 # EvenHub private Tailscale deployment
 
-EvenHub 0.4.1 has one private application origin,
+EvenHub 0.4.2 has one private application origin,
 `https://<device>.<tailnet>.ts.net`. The concrete value is stored only in the
 owner's ignored build configuration and the installed backend environment; it
 must not be committed. Tailscale Serve terminates HTTPS on the Pi's tailnet
@@ -57,7 +57,7 @@ chmod 0600 .env.private
 npm test
 npm run pack:verify
 npm run pack:private
-sha256sum nanoclaw-evenhub-0.4.1.ehpk
+sha256sum nanoclaw-evenhub-0.4.2.ehpk
 ```
 
 The private packer requires mode `0600`, validates a canonical HTTPS `ts.net`
@@ -65,8 +65,9 @@ origin, injects it into the client, and renders a temporary manifest with only
 the corresponding HTTPS and WSS whitelist entries. The generated manifest and
 `.ehpk` remain ignored. The package ID remains
 `dev.inhesrom.nanoclaw.evenhub`, so upgrading preserves the companion's stored
-bearer token. On launch, `/readyz` must succeed before recording is enabled; a
-network failure shows `Connect Tailscale and retry.`
+bearer token. On launch, `/capabilities` independently enables voice and text;
+a network failure shows `Connect Tailscale and retry.` `/readyz` retains its
+all-dependencies readiness semantics for operational checks.
 
 ## Install and validate the boundary
 
@@ -133,6 +134,8 @@ EVENHUB_FQDN=device.tailnet.ts.net
 curl --fail "https://${EVENHUB_FQDN}/api/even/v1/healthz"
 curl --fail -H 'X-EvenHub-Protocol-Version: 2' \
   "https://${EVENHUB_FQDN}/api/even/v1/readyz"
+curl --fail -H 'X-EvenHub-Protocol-Version: 2' \
+  "https://${EVENHUB_FQDN}/api/even/v1/capabilities"
 test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
   -H 'X-EvenHub-Protocol-Version: 1' \
   "https://${EVENHUB_FQDN}/api/even/v1/readyz")" = 426
@@ -160,9 +163,14 @@ Run short, representative, and automatic 30-second physical turns with
 Tailscale enabled on both Wi-Fi and cellular. Confirm live draft following,
 tap-to-stop, `Transcribing…` until the final transcript, the automatically open
 review strip with `Send` selected, and four-line feed scrolling with contextual
-arrow hints. Check all four `Thinking` frames, the unclipped rounded frame, and
-that the native right-side capture marker still permits tap, double-tap, and
-swipe gestures. Exercise `Send` and `Try again`. Verify no WhatsApp prompt exists
+arrow hints. Check the proportional `│`/`█` scrollbar at the top, middle, and
+bottom; verify its glyphs and feed clipping on physical G2 hardware. Check all
+four `Thinking` frames, the unclipped rounded frame, and that the native
+right-side capture marker still permits tap, double-tap, and swipe gestures.
+Exercise voice `Send` and `Try again`, then send a multiline phone prompt and
+verify it appears unchanged in the same phone/G2 history. Stop Moonshine and
+confirm the G2 microphone stays closed while phone text remains enabled. Verify
+no WhatsApp prompt exists
 before `Send`, discard starts a replacement recording only after host
 acknowledgement, relaunch restores an unresolved draft with the strip open, and
 completed history is session-only. Then disconnect

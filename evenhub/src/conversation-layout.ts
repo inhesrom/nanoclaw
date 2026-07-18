@@ -1,8 +1,9 @@
 import { measureTextWrap } from '@evenrealities/pretext';
 
-export const G2_FEED_WIDTH = 568;
+export const G2_FEED_WIDTH = 544;
 export const G2_FEED_LINES = 8;
 export const G2_SCROLL_LINES = 4;
+export const G2_SCROLLBAR_ROWS = 8;
 
 export type ConversationSpeaker = 'You' | 'NanoClaw' | 'Notice';
 
@@ -86,6 +87,32 @@ export function scrollConversation(
     0,
     projection.maxOffset,
   );
+}
+
+/** Projects the wrapped feed viewport onto an eight-glyph proportional track. */
+export function projectConversationScrollbar(
+  projection: Pick<ConversationProjection, 'lines' | 'offset' | 'maxOffset'>,
+  viewportLines = G2_FEED_LINES,
+  trackRows = G2_SCROLLBAR_ROWS,
+): string {
+  const totalLines = projection.lines.length;
+  if (totalLines <= viewportLines || trackRows < 1) return '';
+  const visibleLines = Math.min(viewportLines, totalLines);
+  const thumbRows = Math.max(
+    1,
+    Math.min(trackRows, Math.round((visibleLines / totalLines) * trackRows)),
+  );
+  const travel = trackRows - thumbRows;
+  const thumbStart =
+    projection.maxOffset === 0
+      ? 0
+      : Math.round((projection.offset / projection.maxOffset) * travel);
+  return new Array(trackRows)
+    .fill('│')
+    .map((glyph, row) =>
+      row >= thumbStart && row < thumbStart + thumbRows ? '█' : glyph,
+    )
+    .join('\n');
 }
 
 function wrapText(source: string, width: number): string[] {

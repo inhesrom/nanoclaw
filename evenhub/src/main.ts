@@ -28,7 +28,8 @@ interface HubEvent {
 const bridge = await waitForEvenAppBridge();
 const startupContainers = createG2StartupContainers({
   feed: 'NanoClaw\nConnecting…',
-  status: 'Private Tailscale voice link',
+  scrollbar: '',
+  status: 'Private Tailscale link',
 });
 await bridge.createStartUpPageContainer(
   new CreateStartUpPageContainer({
@@ -43,6 +44,7 @@ const companion = mountCompanionUi({
   onPair: (code) => controllerRef.current!.pair(code),
   onRetry: () => controllerRef.current!.retry(),
   onNewTurn: () => controllerRef.current!.newTurn(),
+  onSendText: (text) => controllerRef.current!.submitText(text),
   onConfirm: async (decision) => {
     const resolved = await controllerRef.current!.confirm(decision);
     if (resolved === 'discard') await recorderRef.current?.start();

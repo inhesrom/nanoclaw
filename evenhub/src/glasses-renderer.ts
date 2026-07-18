@@ -51,10 +51,21 @@ export class CoalescingGlassesRenderer {
           this.sent.feed = view.feed;
         }
         if (this.pending) continue;
-        if (view.status !== this.sent.status) {
+        if (view.scrollbar !== this.sent.scrollbar) {
           await this.options.bridge.textContainerUpgrade(
             new TextContainerUpgrade({
               containerID: 3,
+              containerName: 'scrollbar',
+              content: view.scrollbar,
+            }),
+          );
+          this.sent.scrollbar = view.scrollbar;
+        }
+        if (this.pending) continue;
+        if (view.status !== this.sent.status) {
+          await this.options.bridge.textContainerUpgrade(
+            new TextContainerUpgrade({
+              containerID: 4,
               containerName: 'status',
               content: view.status,
             }),

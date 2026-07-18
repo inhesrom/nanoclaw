@@ -74,7 +74,7 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 - **Container isolation** - Agents are sandboxed in Docker (macOS/Linux), [Docker Sandboxes](docs/docker-sandboxes.md) (micro VM isolation), or Apple Container (macOS)
 - **Credential security** - Agents never hold raw API keys. Outbound requests route through [OneCLI's Agent Vault](https://github.com/onecli/onecli), which injects credentials at request time and enforces per-agent policies and rate limits.
 - **Agent Swarms** - Spin up teams of specialized agents that collaborate on complex tasks
-- **Even G2 voice (private deployment)** - Version 0.4.1 streams local speech recognition, pauses on a reviewable draft until explicit confirmation, and shows session turns in a continuous conversation feed. See [the plugin guide](evenhub/README.md).
+- **Even G2 voice and text (private deployment)** - Version 0.4.2 streams local speech recognition, accepts multiline phone prompts when STT is unavailable, and shows session turns in a scrollable conversation feed. See [the plugin guide](evenhub/README.md).
 - **Optional integrations** - Add Gmail (`/add-gmail`) and more via skills
 
 ## Usage

@@ -32,6 +32,13 @@ interface PendingUpload {
   idempotencyKey: string;
 }
 
+interface PendingText {
+  text: string;
+  idempotencyKey: string;
+}
+
+export const MAX_TEXT_CODE_POINTS = 2_000;
+
 const defaultDelay = (milliseconds: number) =>
   new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 
@@ -39,6 +46,7 @@ export class TurnController {
   private stateValue: AppState = initialState;
   private token: string | null = null;
   private pendingUpload?: PendingUpload;
+  private pendingText?: PendingText;
   private liveTurn?: LiveTurn;
   private recordingIdempotencyKey?: string;
   private restoredState?: { hasToken: boolean; activeTurn?: ActiveTurn };
@@ -70,20 +78,22 @@ export class TurnController {
   }
 
   async pair(code: string, deviceName = 'Even G2'): Promise<void> {
+    let result;
     try {
-      const result = await this.options.api.pair(code, deviceName);
-      await this.options.storage.set(STORAGE_KEYS.token, result.token);
-      this.token = result.token;
-      this.dispatch({ type: 'PAIRED' });
+      result = await this.options.api.pair(code, deviceName);
     } catch (error) {
       this.dispatch({ type: 'PAIR_FAILED', message: errorMessage(error) });
       throw error;
     }
+    await this.options.storage.set(STORAGE_KEYS.token, result.token);
+    this.token = result.token;
+    this.restoredState = { hasToken: true };
+    await this.restoreWhenReady();
   }
 
-  startRecording(startedAt = Date.now()): void {
+  startRecording(startedAt = Date.now()): boolean {
     this.dispatch({ type: 'RECORD_STARTED', startedAt });
-    if (!this.token || this.stateValue.kind !== 'recording') return;
+    if (!this.token || this.stateValue.kind !== 'recording') return false;
     this.recordingIdempotencyKey =
       this.options.createIdempotencyKey?.() ?? crypto.randomUUID();
     this.liveTurn = this.options.api.startLiveTurn?.(
@@ -101,6 +111,7 @@ export class TurnController {
         this.dispatch({ type: 'TRANSCRIPT_SNAPSHOT', finalText, interimText });
       },
     );
+    return true;
   }
 
   recordingProgress(bytes: number): void {
@@ -165,7 +176,36 @@ export class TurnController {
     await this.uploadPending();
   }
 
+  async submitText(rawText: string): Promise<boolean> {
+    if (!this.token) {
+      this.dispatch({
+        type: 'PAIRING_REQUIRED',
+        message: 'Pair this companion before sending a turn.',
+      });
+      return false;
+    }
+    const text = normalizeTextPrompt(rawText);
+    if (
+      this.stateValue.kind !== 'ready' ||
+      !this.stateValue.capabilities?.text ||
+      !text ||
+      [...text].length > MAX_TEXT_CODE_POINTS
+    ) {
+      return false;
+    }
+    this.pendingText = {
+      text,
+      idempotencyKey:
+        this.options.createIdempotencyKey?.() ?? crypto.randomUUID(),
+    };
+    return this.submitPendingText();
+  }
+
   async retry(): Promise<void> {
+    if (this.pendingText) {
+      await this.submitPendingText();
+      return;
+    }
     if (this.pendingUpload) {
       await this.uploadPending();
       return;
@@ -234,6 +274,7 @@ export class TurnController {
     this.liveTurn = undefined;
     this.recordingIdempotencyKey = undefined;
     this.pendingUpload = undefined;
+    this.pendingText = undefined;
     this.confirmation = undefined;
     this.dispatch({ type: 'READY' });
     await this.clearActiveTurn();
@@ -245,6 +286,7 @@ export class TurnController {
     this.liveTurn = undefined;
     this.recordingIdempotencyKey = undefined;
     this.pendingUpload = undefined;
+    this.pendingText = undefined;
     this.confirmation = undefined;
   }
 
@@ -294,6 +336,56 @@ export class TurnController {
       undefined,
       !(lastError instanceof EvenHubApiError) || lastError.retryable,
     );
+  }
+
+  private async submitPendingText(): Promise<boolean> {
+    const pending = this.pendingText;
+    const token = this.token;
+    if (!pending || !token) return false;
+    this.dispatch({
+      type: 'TEXT_SUBMIT_STARTED',
+      idempotencyKey: pending.idempotencyKey,
+      text: pending.text,
+    });
+    if (this.stateValue.kind !== 'submitting_text') return false;
+
+    let lastError: unknown;
+    for (const backoff of [0, 500, 1_000, 2_000]) {
+      if (backoff > 0) await this.delay(backoff);
+      try {
+        const result = await this.options.api.submitTextTurn(
+          token,
+          pending.text,
+          pending.idempotencyKey,
+        );
+        const activeTurn = {
+          id: result.turnId,
+          idempotencyKey: pending.idempotencyKey,
+        };
+        await Promise.all([
+          this.options.storage.set(STORAGE_KEYS.activeTurnId, result.turnId),
+          this.options.storage.set(
+            STORAGE_KEYS.activeIdempotencyKey,
+            pending.idempotencyKey,
+          ),
+        ]);
+        this.pendingText = undefined;
+        this.dispatch({ type: 'TEXT_ACCEPTED', turn: activeTurn, result });
+        if (!(await this.consumeTurn(activeTurn, result))) {
+          void this.poll(activeTurn);
+        }
+        return true;
+      } catch (error) {
+        lastError = error;
+        if (error instanceof EvenHubApiError && !error.retryable) break;
+      }
+    }
+    await this.handleFailure(
+      lastError,
+      undefined,
+      !(lastError instanceof EvenHubApiError) || lastError.retryable,
+    );
+    return false;
   }
 
   private async poll(activeTurn: ActiveTurn): Promise<void> {
@@ -474,8 +566,16 @@ export class TurnController {
   private async restoreWhenReady(): Promise<void> {
     const restored = this.restoredState;
     if (!restored) return;
+    if (!restored.hasToken) {
+      this.dispatch({ type: 'RESTORED', ...restored });
+      return;
+    }
     try {
-      await this.options.api.checkReady();
+      const result = await this.options.api.getCapabilities();
+      this.dispatch({
+        type: 'CAPABILITIES_UPDATED',
+        capabilities: result.capabilities,
+      });
     } catch (error) {
       this.readinessBlocked = true;
       this.dispatch({
@@ -510,6 +610,10 @@ export class TurnController {
     this.stateValue = reduceAppState(this.stateValue, action);
     this.options.onState(this.stateValue);
   }
+}
+
+function normalizeTextPrompt(text: string): string {
+  return text.replace(/\r\n/g, '\n').trim();
 }
 
 export function conversationProjectionForState(

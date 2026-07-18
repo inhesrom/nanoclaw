@@ -9,6 +9,7 @@ export interface CompanionActions {
   onRetry(): Promise<void>;
   onNewTurn(): Promise<void>;
   onConfirm(decision: ConfirmationDecision): Promise<void>;
+  onSendText(text: string): Promise<boolean>;
 }
 
 export interface CompanionUi {
@@ -19,6 +20,7 @@ const labels: Record<AppState['kind'], string> = {
   booting: 'Connecting',
   pairing: 'Pairing required',
   ready: 'Ready',
+  submitting_text: 'Sending',
   recording: 'Listening',
   stopping: 'Transcribing',
   uploading: 'Transcribing',
@@ -40,13 +42,38 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
         <button id="latest" class="latest" data-action="latest" hidden>Latest ↓</button>
       </div>
       <footer id="dock" class="dock" aria-live="polite"></footer>
+      <form id="composer" class="composer" hidden>
+        <div class="composer-head">
+          <label for="message">Message</label>
+          <output id="messageCount" for="message">0 / 2000</output>
+        </div>
+        <div class="composer-controls">
+          <textarea id="message" name="message" rows="3" placeholder="Type a message…"></textarea>
+          <button id="messageSend" type="submit">Send</button>
+        </div>
+      </form>
     </div>`;
 
   const connection = root.querySelector<HTMLElement>('#connection')!;
   const ledger = root.querySelector<HTMLElement>('#ledger')!;
   const dock = root.querySelector<HTMLElement>('#dock')!;
   const latest = root.querySelector<HTMLButtonElement>('#latest')!;
+  const composer = root.querySelector<HTMLFormElement>('#composer')!;
+  const message = root.querySelector<HTMLTextAreaElement>('#message')!;
+  const messageCount = root.querySelector<HTMLOutputElement>('#messageCount')!;
+  const messageSend = root.querySelector<HTMLButtonElement>('#messageSend')!;
   let reviewingHistory = false;
+  let composerEnabled = false;
+  let previousKind: AppState['kind'] = 'booting';
+
+  const syncComposer = () => {
+    message.value = limitComposerText(message.value);
+    const length = [...message.value].length;
+    messageCount.value = `${length} / 2000`;
+    message.disabled = !composerEnabled;
+    messageSend.disabled =
+      !composerEnabled || message.value.trim().length === 0;
+  };
 
   ledger.addEventListener('scroll', () => {
     reviewingHistory =
@@ -55,6 +82,12 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
   });
   root.addEventListener('submit', (event) => {
     const form = event.target as HTMLFormElement;
+    if (form.id === 'composer') {
+      event.preventDefault();
+      if (!composerEnabled || messageSend.disabled) return;
+      void actions.onSendText(message.value).catch(() => false);
+      return;
+    }
     if (form.id !== 'pairForm') return;
     event.preventDefault();
     const input = form.elements.namedItem('code') as HTMLInputElement;
@@ -67,6 +100,7 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
         button.disabled = false;
       });
   });
+  message.addEventListener('input', syncComposer);
   root.addEventListener('click', (event) => {
     const action = (event.target as HTMLElement).closest<HTMLButtonElement>(
       'button[data-action]',
@@ -88,10 +122,16 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
 
   return {
     render(state) {
+      const textAcknowledged = shouldClearComposer(previousKind, state.kind);
+      if (textAcknowledged) message.value = '';
       const priorScrollTop = ledger.scrollTop;
       connection.innerHTML = renderConnection(state);
       ledger.innerHTML = renderLedger(state);
       dock.innerHTML = renderDock(state);
+      composer.hidden = state.kind === 'booting' || state.kind === 'pairing';
+      composerEnabled =
+        state.kind === 'ready' && state.capabilities?.text === true;
+      syncComposer();
       if (reviewingHistory) {
         ledger.scrollTop = priorScrollTop;
         latest.hidden = false;
@@ -99,12 +139,26 @@ export function mountCompanionUi(actions: CompanionActions): CompanionUi {
         ledger.scrollTop = ledger.scrollHeight;
         latest.hidden = true;
       }
+      previousKind = state.kind;
     },
   };
 }
 
+export function limitComposerText(text: string, limit = 2_000): string {
+  return [...text].slice(0, limit).join('');
+}
+
+export function shouldClearComposer(
+  previous: AppState['kind'],
+  next: AppState['kind'],
+): boolean {
+  return (
+    previous === 'submitting_text' && (next === 'thinking' || next === 'ready')
+  );
+}
+
 export function renderCompanionState(state: AppState): string {
-  return `${renderConnection(state)}${renderLedger(state)}${renderDock(state)}`;
+  return `${renderConnection(state)}${renderLedger(state)}${renderDock(state)}${renderComposer(state)}`;
 }
 
 function renderConnection(state: AppState): string {
@@ -130,9 +184,17 @@ function renderConnection(state: AppState): string {
 function renderLedger(state: AppState): string {
   const entries = conversationEntries(state);
   if (entries.length === 0) {
+    const invitation =
+      state.kind === 'pairing'
+        ? 'Pair to begin.'
+        : state.capabilities?.voice
+          ? 'Tap your G2 to speak.'
+          : state.capabilities?.text
+            ? 'Type a message below.'
+            : 'Host capabilities unavailable.';
     return `<div class="empty">
       <p>Conversation ledger</p>
-      <strong>${state.kind === 'pairing' ? 'Pair to begin.' : 'Tap your G2 to speak.'}</strong>
+      <strong>${invitation}</strong>
     </div>`;
   }
   return entries
@@ -166,6 +228,12 @@ function renderDock(state: AppState): string {
   return status;
 }
 
+function renderComposer(state: AppState): string {
+  if (state.kind === 'booting' || state.kind === 'pairing') return '';
+  const enabled = state.kind === 'ready' && state.capabilities?.text === true;
+  return `<form class="composer"><label>Message</label><textarea rows="3" placeholder="Type a message…"${enabled ? '' : ' disabled'}></textarea><button type="submit"${enabled ? '' : ' disabled'}>Send</button></form>`;
+}
+
 function statusText(state: AppState): string {
   switch (state.kind) {
     case 'booting':
@@ -173,7 +241,14 @@ function statusText(state: AppState): string {
     case 'pairing':
       return 'Run npm run evenhub:pair on the host.';
     case 'ready':
-      return 'Tap to record.';
+      if (state.capabilities?.voice && state.capabilities.text) {
+        return 'Tap to record or type below.';
+      }
+      if (state.capabilities?.voice) return 'Tap to record.';
+      if (state.capabilities?.text) return 'Voice unavailable. Type below.';
+      return 'Voice and text are unavailable.';
+    case 'submitting_text':
+      return 'Sending…';
     case 'recording':
       return `Listening · ${(state.bytes / 32_000).toFixed(1)}s · Tap to stop`;
     case 'stopping':
@@ -208,8 +283,8 @@ const styles = `<style>
   }
   * { box-sizing: border-box; }
   body { margin: 0; min-width: 280px; min-height: 100vh; background: radial-gradient(circle at 70% -10%, #26342f 0, #111816 36%, #080c0b 72%); }
-  button, input { font: inherit; }
-  .lens { min-height: 100vh; max-width: 760px; margin: 0 auto; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+  button, input, textarea { font: inherit; }
+  .lens { min-height: 100vh; max-width: 760px; margin: 0 auto; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; }
   .connection { min-height: 76px; padding: 18px clamp(20px, 5vw, 42px); border-bottom: 1px solid #33413b; display: flex; align-items: center; justify-content: space-between; gap: 20px; background: rgba(8, 12, 11, .72); backdrop-filter: blur(14px); }
   .brand, .connection-state, .phase, .speaker, .utterance, .dock-label, .dock-status, .empty p, .empty strong { margin: 0; }
   .brand { color: #f4f7f4; font-weight: 760; letter-spacing: -.02em; }
@@ -218,7 +293,7 @@ const styles = `<style>
   .connection-state i { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #9ee8c7; box-shadow: 0 0 12px #74cfa7; }
   .ledger-wrap { min-height: 0; position: relative; display: grid; grid-template-columns: 44px 1fr; padding: 0 clamp(20px, 5vw, 42px); }
   .rail { border-right: 1px solid #34423c; }
-  .ledger { min-height: 220px; max-height: calc(100vh - 176px); overflow-y: auto; padding: 28px 0 72px 26px; scroll-behavior: smooth; overscroll-behavior: contain; }
+  .ledger { min-height: 180px; max-height: calc(100vh - 310px); overflow-y: auto; padding: 28px 0 72px 26px; scroll-behavior: smooth; overscroll-behavior: contain; }
   .signal { position: relative; padding: 0 0 30px; }
   .signal-dot { position: absolute; left: -31px; top: 4px; width: 9px; height: 9px; border: 2px solid #111816; border-radius: 50%; background: #7f948a; box-shadow: 0 0 0 1px #52645c; }
   .signal-nanoclaw .signal-dot { background: #b6f29d; box-shadow: 0 0 16px rgba(182, 242, 157, .4); }
@@ -228,20 +303,27 @@ const styles = `<style>
   .empty { padding: 46px 0 0 26px; color: #7f9088; }
   .empty p { font: 700 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .1em; text-transform: uppercase; }
   .empty strong { display: block; margin-top: 12px; color: #d8e2dc; font-size: 20px; font-weight: 520; }
-  .dock { position: sticky; bottom: 0; min-height: 100px; padding: 17px clamp(20px, 5vw, 42px) max(17px, env(safe-area-inset-bottom)); border-top: 1px solid #415048; display: flex; align-items: center; justify-content: space-between; gap: 20px; background: rgba(13, 19, 17, .94); backdrop-filter: blur(18px); }
+  .dock { min-height: 84px; padding: 14px clamp(20px, 5vw, 42px); border-top: 1px solid #415048; display: flex; align-items: center; justify-content: space-between; gap: 20px; background: rgba(13, 19, 17, .94); backdrop-filter: blur(18px); }
   .dock-label { color: #75877f; font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
   .dock-status { margin-top: 5px; color: #edf3ef; line-height: 1.35; }
   .dock-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
   button { border: 1px solid #b6f29d; border-radius: 999px; padding: 10px 17px; color: #08100b; background: #b6f29d; cursor: pointer; font-weight: 760; }
   button.secondary { color: #dce7e0; border-color: #4d5d55; background: #1b2521; }
   button:disabled { opacity: .55; cursor: wait; }
-  button:focus-visible, input:focus-visible { outline: 2px solid #a7f4da; outline-offset: 3px; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #a7f4da; outline-offset: 3px; }
   .latest { position: absolute; right: clamp(28px, 7vw, 54px); bottom: 16px; padding: 7px 12px; border-color: #52645b; color: #dce7e0; background: #1b2521; font-size: 12px; }
   .pair-form { display: grid; grid-template-columns: minmax(110px, 160px) auto; gap: 7px; align-items: end; }
   .pair-form label { grid-column: 1 / -1; color: #8fa097; font-size: 11px; }
   .pair-form input { min-width: 0; border: 1px solid #526159; border-radius: 5px; padding: 9px; color: #eff5f1; background: #111815; font: 750 18px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .15em; }
   .pair-form button { border-radius: 5px; padding: 9px 13px; }
   .error { grid-column: 1 / -1; margin: 0; color: #ff9e92; font-size: 12px; }
+  .composer { padding: 14px clamp(20px, 5vw, 42px) max(16px, env(safe-area-inset-bottom)); border-top: 1px solid #2d3934; background: #0b110f; }
+  .composer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; color: #75877f; font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
+  .composer-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+  .composer textarea { width: 100%; min-height: 68px; max-height: 156px; resize: vertical; border: 1px solid #415149; border-radius: 7px; padding: 11px 12px; color: #edf4ef; background: #111916; line-height: 1.4; }
+  .composer textarea::placeholder { color: #708078; }
+  .composer textarea:disabled { opacity: .48; resize: none; }
+  .composer button { min-width: 78px; border-radius: 7px; }
   @media (max-width: 480px) { .connection { align-items: flex-start; } .pair-form { grid-template-columns: 1fr; } .pair-form label, .pair-form .error { grid-column: auto; } .dock { align-items: flex-start; } }
   @media (prefers-reduced-motion: reduce) { .ledger { scroll-behavior: auto; } }
 </style>`;

@@ -10,7 +10,9 @@ import {
   getActiveEvenDevices,
   getEvenPairingAttempt,
   getEvenPairingCode,
+  getEvenTurnByIdempotencyKey,
   getEvenTurnForDevice,
+  insertEvenTurn,
   recordEvenPairingFailure,
   resolveEvenTurnConfirmation,
   touchEvenDevice,
@@ -34,7 +36,8 @@ const MAX_JSON_BYTES = 16 * 1024;
 const PAIR_FAILURE_LIMIT = 5;
 const PAIR_LOCK_MS = 15 * 60 * 1000;
 export const EVENHUB_PROTOCOL_VERSION = 2;
-export const EVENHUB_RELEASE_VERSION = '0.4.1';
+export const EVENHUB_RELEASE_VERSION = '0.4.2';
+export const MAX_EVENHUB_TEXT_CODE_POINTS = 2_000;
 
 export interface EvenTurnProcessor {
   process(turn: EvenTurn): Promise<void>;
@@ -266,6 +269,71 @@ function validateTurnHeaders(request: IncomingMessage): {
   return { idempotencyKey, durationMs };
 }
 
+function requiredUnavailable(
+  dependencies: EvenHubDependencySnapshot,
+  required: readonly (keyof EvenHubDependencySnapshot)[],
+): string[] {
+  return required.filter((component) => dependencies[component] === 'down');
+}
+
+function normalizeTextPrompt(text: string): string {
+  return text.replace(/\r\n/g, '\n').trim();
+}
+
+function acceptTextTurn(
+  device: EvenDevice,
+  idempotencyKey: string,
+  text: string,
+): { turn: EvenTurn; created: boolean } {
+  const replay = (existing: EvenTurn) => {
+    if (existing.input_kind !== 'text' || existing.transcript !== text) {
+      throw new ApiError(
+        409,
+        'idempotency_payload_mismatch',
+        'idempotencyKey was already used with different content',
+      );
+    }
+    return { turn: existing, created: false };
+  };
+  const existing = getEvenTurnByIdempotencyKey(device.id, idempotencyKey);
+  if (existing) return replay(existing);
+
+  const id = createUuidV7();
+  const timestamp = new Date().toISOString();
+  const turn: EvenTurn = {
+    id,
+    device_id: device.id,
+    idempotency_key: idempotencyKey,
+    request_sha256: createHash('sha256').update(text).digest('hex'),
+    input_kind: 'text',
+    audio_path: `text:${id}`,
+    audio_duration_ms: 0,
+    state: 'dispatching',
+    confirmation_decision: 'send',
+    transcript: text,
+    whatsapp_message_id: null,
+    answer: null,
+    error_code: null,
+    error_message: null,
+    stt_attempts: 0,
+    created_at: timestamp,
+    updated_at: timestamp,
+    completed_at: null,
+  };
+  try {
+    insertEvenTurn(turn);
+  } catch (error) {
+    const raced = getEvenTurnByIdempotencyKey(device.id, idempotencyKey);
+    if (!raced) throw error;
+    return replay(raced);
+  }
+  logger.info(
+    { turn_id: id, state: 'dispatching', input_kind: 'text' },
+    'even.turn.accepted',
+  );
+  return { turn, created: true };
+}
+
 export class EvenHubServer {
   private readonly maxAudioBytes: number;
   private readonly finalizer: EvenTurnFinalizer;
@@ -436,12 +504,44 @@ export class EvenHubServer {
         });
         return;
       }
+      if (
+        request.method === 'GET' &&
+        pathname === '/api/even/v1/capabilities'
+      ) {
+        requireProtocolVersion(request);
+        const dependencies = await this.dependencies();
+        const voiceUnavailable = requiredUnavailable(dependencies, [
+          'database',
+          'stt',
+          'whatsapp',
+        ]);
+        const textUnavailable = requiredUnavailable(dependencies, [
+          'database',
+          'whatsapp',
+        ]);
+        sendJson(response, 200, {
+          protocolVersion: EVENHUB_PROTOCOL_VERSION,
+          capabilities: {
+            voice: voiceUnavailable.length === 0,
+            text: textUnavailable.length === 0,
+          },
+          unavailable: {
+            voice: voiceUnavailable,
+            text: textUnavailable,
+          },
+        });
+        return;
+      }
       if (request.method === 'POST' && pathname === '/api/even/v1/pair') {
         await this.handlePair(request, response);
         return;
       }
       if (request.method === 'POST' && pathname === '/api/even/v1/turns') {
         await this.handleCreateTurn(request, response);
+        return;
+      }
+      if (request.method === 'POST' && pathname === '/api/even/v1/text-turns') {
+        await this.handleCreateTextTurn(request, response);
         return;
       }
       if (
@@ -739,6 +839,64 @@ export class EvenHubServer {
       }
       throw error;
     }
+  }
+
+  private async handleCreateTextTurn(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    requireProtocolVersion(request);
+    const device = authorize(request);
+    const dependencies = await this.dependencies();
+    const unavailable = requiredUnavailable(dependencies, [
+      'database',
+      'whatsapp',
+    ]);
+    if (unavailable.length > 0) {
+      throw new ApiError(
+        503,
+        'text_unavailable',
+        `EvenHub text is waiting for ${unavailable.join(', ')}`,
+        true,
+      );
+    }
+
+    const body = await readJson(request);
+    const fields =
+      body && typeof body === 'object'
+        ? (body as Record<string, unknown>)
+        : undefined;
+    const idempotencyKey = fields?.idempotencyKey;
+    if (typeof idempotencyKey !== 'string' || !isUuidV4(idempotencyKey)) {
+      throw new ApiError(
+        400,
+        'invalid_idempotency_key',
+        'idempotencyKey must be a UUIDv4',
+      );
+    }
+    if (typeof fields?.text !== 'string') {
+      throw new ApiError(400, 'invalid_text', 'text must be a string');
+    }
+    const text = normalizeTextPrompt(fields.text);
+    if (!text) {
+      throw new ApiError(400, 'invalid_text', 'text must not be blank');
+    }
+    if ([...text].length > MAX_EVENHUB_TEXT_CODE_POINTS) {
+      throw new ApiError(
+        413,
+        'text_too_long',
+        `text must not exceed ${MAX_EVENHUB_TEXT_CODE_POINTS} Unicode code points`,
+      );
+    }
+
+    const result = acceptTextTurn(device, idempotencyKey, text);
+    sendJson(
+      response,
+      result.created ? 201 : 200,
+      toPublicEvenTurn(result.turn),
+      result.created ? {} : { 'Idempotency-Replayed': 'true' },
+    );
+    if (result.created) this.options.onDispatchReady?.();
   }
 
   private handleGetTurn(

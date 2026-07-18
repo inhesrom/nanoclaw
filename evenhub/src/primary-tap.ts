@@ -14,7 +14,7 @@ export async function handlePrimaryTap({
   recorder,
 }: PrimaryTapActions): Promise<void> {
   const state = controller.state;
-  if (state.kind === 'ready') {
+  if (state.kind === 'ready' && state.capabilities?.voice) {
     await recorder.start();
     return;
   }

@@ -108,6 +108,7 @@ export class EvenTurnFinalizer {
       device_id: device.id,
       idempotency_key: idempotencyKey,
       request_sha256: audio.sha256,
+      input_kind: 'audio',
       audio_path: finalPath,
       audio_duration_ms: audio.durationMs,
       state: 'accepted',

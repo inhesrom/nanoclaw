@@ -40,6 +40,7 @@ export interface EvenTurn {
   device_id: string;
   idempotency_key: string;
   request_sha256: string;
+  input_kind: 'audio' | 'text';
   audio_path: string;
   audio_duration_ms: number;
   state: EvenTurnState;

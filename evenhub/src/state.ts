@@ -13,6 +13,11 @@ export type ServerTurnState =
 
 export type ConfirmationDecision = 'send' | 'discard';
 
+export interface AppCapabilities {
+  voice: boolean;
+  text: boolean;
+}
+
 export interface ServerTurn {
   turnId: string;
   state: ServerTurnState;
@@ -48,6 +53,11 @@ type AppViewState =
   | { kind: 'booting' }
   | { kind: 'pairing'; error?: string }
   | { kind: 'ready' }
+  | {
+      kind: 'submitting_text';
+      idempotencyKey: string;
+      text: string;
+    }
   | {
       kind: 'recording';
       startedAt: number;
@@ -88,12 +98,18 @@ type AppViewState =
       activeTurn?: ActiveTurn;
     };
 
-export type AppState = AppViewState & { session: SessionState };
+export type AppState = AppViewState & {
+  session: SessionState;
+  capabilities?: AppCapabilities;
+};
 
 export type AppAction =
   | { type: 'RESTORED'; hasToken: boolean; activeTurn?: ActiveTurn }
   | { type: 'PAIR_FAILED'; message: string }
   | { type: 'PAIRED' }
+  | { type: 'CAPABILITIES_UPDATED'; capabilities: AppCapabilities }
+  | { type: 'TEXT_SUBMIT_STARTED'; idempotencyKey: string; text: string }
+  | { type: 'TEXT_ACCEPTED'; turn: ActiveTurn; result: ServerTurn }
   | { type: 'RECORD_STARTED'; startedAt: number }
   | { type: 'RECORD_PROGRESS'; bytes: number }
   | { type: 'TRANSCRIPT_SNAPSHOT'; finalText: string; interimText: string }
@@ -139,25 +155,64 @@ const emptySession: SessionState = {
 export const initialState: AppState = {
   kind: 'booting',
   session: emptySession,
+  capabilities: { voice: false, text: false },
 };
 
 export function reduceAppState(state: AppState, action: AppAction): AppState {
   const session = state.session;
+  const capabilities = state.capabilities ?? { voice: false, text: false };
   switch (action.type) {
     case 'RESTORED':
-      if (!action.hasToken) return { kind: 'pairing', session };
+      if (!action.hasToken) return { kind: 'pairing', session, capabilities };
       return action.activeTurn
-        ? { kind: 'transcribing', turn: action.activeTurn, session }
-        : { kind: 'ready', session };
+        ? {
+            kind: 'transcribing',
+            turn: action.activeTurn,
+            session,
+            capabilities,
+          }
+        : { kind: 'ready', session, capabilities };
     case 'PAIR_FAILED':
-      return { kind: 'pairing', error: action.message, session };
+      return { kind: 'pairing', error: action.message, session, capabilities };
     case 'PAIRED':
     case 'READY':
-      return { kind: 'ready', session };
+      return { kind: 'ready', session, capabilities };
+    case 'CAPABILITIES_UPDATED':
+      return { ...state, capabilities: action.capabilities };
     case 'PAIRING_REQUIRED':
-      return { kind: 'pairing', error: action.message, session };
+      return {
+        kind: 'pairing',
+        error: action.message,
+        session,
+        capabilities,
+      };
+    case 'TEXT_SUBMIT_STARTED':
+      return (state.kind === 'ready' || state.kind === 'error') &&
+        capabilities.text
+        ? {
+            kind: 'submitting_text',
+            idempotencyKey: action.idempotencyKey,
+            text: action.text,
+            session: {
+              ...session,
+              manuallyScrolled: false,
+              anchorTurnId: undefined,
+            },
+            capabilities,
+          }
+        : state;
+    case 'TEXT_ACCEPTED':
+      return state.kind === 'submitting_text'
+        ? {
+            kind: 'thinking',
+            turn: action.turn,
+            transcript: action.result.transcript || state.text,
+            session,
+            capabilities,
+          }
+        : state;
     case 'RECORD_STARTED':
-      return state.kind === 'ready'
+      return state.kind === 'ready' && capabilities.voice
         ? {
             kind: 'recording',
             startedAt: action.startedAt,
@@ -167,6 +222,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
               manuallyScrolled: false,
               anchorTurnId: undefined,
             },
+            capabilities,
           }
         : state;
     case 'RECORD_PROGRESS':
@@ -188,6 +244,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
             finalText: state.finalText,
             interimText: state.interimText,
             session,
+            capabilities,
           }
         : state;
     case 'UPLOAD_STARTED':
@@ -198,6 +255,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
             transcript:
               state.kind === 'stopping' ? snapshotText(state) : undefined,
             session,
+            capabilities,
           }
         : state;
     case 'TURN_ACCEPTED':
@@ -207,6 +265,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
             turn: action.turn,
             transcript: state.transcript,
             session,
+            capabilities,
           }
         : state;
     case 'STREAM_FINAL':
@@ -254,6 +313,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
           manuallyScrolled: false,
           anchorTurnId: action.turnId,
         },
+        capabilities,
       };
     }
     case 'TURN_FAILED': {
@@ -270,6 +330,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
           manuallyScrolled: false,
           anchorTurnId: action.turnId,
         },
+        capabilities,
       };
     }
     case 'TURN_DISCARDED':
@@ -280,6 +341,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
           manuallyScrolled: false,
           anchorTurnId: undefined,
         },
+        capabilities,
       };
     case 'SCROLLED':
       return {
@@ -289,6 +351,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
           scrollOffset: action.offset,
           manuallyScrolled: true,
         },
+        capabilities,
       };
     case 'FAILED':
       return {
@@ -297,6 +360,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
         retryable: action.retryable,
         activeTurn: action.activeTurn,
         session,
+        capabilities,
       };
   }
 }
@@ -347,7 +411,13 @@ function stateForServerTurn(
 ): AppState {
   const transcript = result.transcript || currentTranscript(state);
   if (result.state === 'accepted' || result.state === 'transcribing') {
-    return { kind: 'transcribing', turn, transcript, session: state.session };
+    return {
+      kind: 'transcribing',
+      turn,
+      transcript,
+      session: state.session,
+      capabilities: state.capabilities,
+    };
   }
   if (result.state === 'awaiting_confirmation') {
     return {
@@ -357,6 +427,7 @@ function stateForServerTurn(
       choiceOpen: true,
       choice: 'send',
       session: { ...state.session, manuallyScrolled: false },
+      capabilities: state.capabilities,
     };
   }
   if (
@@ -364,7 +435,13 @@ function stateForServerTurn(
     result.state === 'queued' ||
     result.state === 'running'
   ) {
-    return { kind: 'thinking', turn, transcript, session: state.session };
+    return {
+      kind: 'thinking',
+      turn,
+      transcript,
+      session: state.session,
+      capabilities: state.capabilities,
+    };
   }
   return state;
 }
@@ -386,6 +463,9 @@ function activeTranscript(
   }
   if (state.kind === 'uploading') {
     return { turnId: 'draft', text: state.transcript };
+  }
+  if (state.kind === 'submitting_text') {
+    return { turnId: `text:${state.idempotencyKey}`, text: state.text };
   }
   if (
     state.kind === 'transcribing' ||

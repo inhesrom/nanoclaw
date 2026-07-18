@@ -19,6 +19,12 @@ export interface PairResult {
   token: string;
 }
 
+export interface CapabilityResult {
+  protocolVersion: 2;
+  capabilities: { voice: boolean; text: boolean };
+  unavailable: { voice: string[]; text: string[] };
+}
+
 export interface SttSession {
   sessionId: string;
   ticket: string;
@@ -46,11 +52,17 @@ export interface LiveTurn {
 
 export interface EvenHubApiPort {
   checkReady(): Promise<void>;
+  getCapabilities(): Promise<CapabilityResult>;
   pair(code: string, deviceName: string): Promise<PairResult>;
   submitTurn(
     token: string,
     pcm: Uint8Array,
     durationMs: number,
+    idempotencyKey: string,
+  ): Promise<ServerTurn>;
+  submitTextTurn(
+    token: string,
+    text: string,
     idempotencyKey: string,
   ): Promise<ServerTurn>;
   startLiveTurn?(
@@ -91,6 +103,20 @@ export class EvenHubApi implements EvenHubApiPort {
     }
   }
 
+  async getCapabilities(): Promise<CapabilityResult> {
+    const controller = new AbortController();
+    const timeout = globalThis.setTimeout(() => controller.abort(), 5_000);
+    try {
+      return await this.request<CapabilityResult>('/api/even/v1/capabilities', {
+        method: 'GET',
+        headers: protocolHeaders(),
+        signal: controller.signal,
+      });
+    } finally {
+      globalThis.clearTimeout(timeout);
+    }
+  }
+
   pair(code: string, deviceName: string): Promise<PairResult> {
     return this.request<PairResult>('/api/even/v1/pair', {
       method: 'POST',
@@ -117,6 +143,22 @@ export class EvenHubApi implements EvenHubApiPort {
         ...protocolHeaders(),
       },
       body: audio,
+    });
+  }
+
+  submitTextTurn(
+    token: string,
+    text: string,
+    idempotencyKey: string,
+  ): Promise<ServerTurn> {
+    return this.request<ServerTurn>('/api/even/v1/text-turns', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...protocolHeaders(),
+      },
+      body: JSON.stringify({ idempotencyKey, text }),
     });
   }
 

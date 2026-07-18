@@ -1,10 +1,12 @@
 import { TextContainerProperty } from '@evenrealities/even_hub_sdk';
 
 import { conversationProjectionForState } from './controller';
+import { projectConversationScrollbar } from './conversation-layout';
 import type { AppState } from './state';
 
 export interface GlassesView {
   feed: string;
+  scrollbar: string;
   status: string;
 }
 
@@ -25,7 +27,7 @@ export const G2_CONTAINER_LAYOUT = {
   feed: {
     xPosition: 0,
     yPosition: 0,
-    width: 576,
+    width: 552,
     height: 240,
     borderWidth: 0,
     borderColor: 5,
@@ -34,6 +36,19 @@ export const G2_CONTAINER_LAYOUT = {
     containerID: 2,
     containerName: 'feed',
     zOrderIndex: 2,
+  },
+  scrollbar: {
+    xPosition: 552,
+    yPosition: 0,
+    width: 24,
+    height: 240,
+    borderWidth: 0,
+    borderColor: 5,
+    borderRadius: 0,
+    paddingLength: 4,
+    containerID: 3,
+    containerName: 'scrollbar',
+    zOrderIndex: 3,
   },
   status: {
     xPosition: 0,
@@ -44,10 +59,10 @@ export const G2_CONTAINER_LAYOUT = {
     borderColor: 5,
     borderRadius: 0,
     paddingLength: 4,
-    containerID: 3,
+    containerID: 4,
     containerName: 'status',
     isEventCapture: 1,
-    zOrderIndex: 3,
+    zOrderIndex: 4,
   },
 } as const;
 
@@ -59,6 +74,10 @@ export function createG2StartupContainers(
     new TextContainerProperty({
       ...G2_CONTAINER_LAYOUT.feed,
       content: view.feed,
+    }),
+    new TextContainerProperty({
+      ...G2_CONTAINER_LAYOUT.scrollbar,
+      content: view.scrollbar,
     }),
     new TextContainerProperty({
       ...G2_CONTAINER_LAYOUT.status,
@@ -73,26 +92,40 @@ export function glassesView(
 ): GlassesView {
   const feed = conversationProjectionForState(state);
   const feedBody = feed.body || 'NanoClaw\n\nTap to record';
+  const scrollbar = projectConversationScrollbar(feed);
   const hint = contextualScrollHint(feed.hasEarlier, feed.hasLater);
   switch (state.kind) {
     case 'booting':
       return {
         feed: 'NanoClaw\nConnecting…',
-        status: 'Private Tailscale voice link',
+        scrollbar: '',
+        status: 'Private Tailscale link',
       };
     case 'pairing':
       return {
         feed: `Pairing required\n\nOpen the companion screen.${state.error ? `\n\n${state.error}` : ''}`,
+        scrollbar: '',
         status: 'Companion setup',
       };
     case 'ready':
       return {
         feed: feedBody,
-        status: joinStatus(hint, 'Tap to record'),
+        scrollbar,
+        status: joinStatus(
+          hint,
+          state.capabilities?.voice ? 'Tap to record' : 'Voice unavailable',
+        ),
+      };
+    case 'submitting_text':
+      return {
+        feed: feedBody,
+        scrollbar,
+        status: joinStatus(hint, 'Sending…'),
       };
     case 'recording':
       return {
         feed: feed.body || 'Listening…',
+        scrollbar,
         status: joinStatus(hint, 'Tap to stop'),
       };
     case 'stopping':
@@ -100,11 +133,13 @@ export function glassesView(
     case 'transcribing':
       return {
         feed: feed.body || 'Transcribing…',
+        scrollbar,
         status: joinStatus(hint, 'Transcribing…'),
       };
     case 'review':
       return {
         feed: feedBody,
+        scrollbar,
         status: state.choiceOpen
           ? state.choice === 'send'
             ? '› Send     Try again'
@@ -114,11 +149,13 @@ export function glassesView(
     case 'thinking':
       return {
         feed: feed.body || 'NanoClaw is thinking…',
+        scrollbar,
         status: joinStatus(hint, thinkingStatus),
       };
     case 'error':
       return {
         feed: feed.body || 'NanoClaw',
+        scrollbar,
         status: state.retryable ? 'Retry in companion' : 'Return in companion',
       };
   }

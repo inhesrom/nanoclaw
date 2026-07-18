@@ -32,7 +32,9 @@ export function cleanupEvenHubStorage(
   let expiredTurns = 0;
   for (const turn of getExpiredEvenTurns(cutoff)) {
     try {
-      fs.rmSync(turn.audio_path, { force: true });
+      if (turn.input_kind === 'audio') {
+        fs.rmSync(turn.audio_path, { force: true });
+      }
       if (deleteExpiredEvenTurn(turn.id, cutoff)) expiredTurns += 1;
     } catch {
       logger.warn(
