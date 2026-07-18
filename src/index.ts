@@ -98,6 +98,7 @@ import { deliverEvenHubReply } from './evenhub/reply-delivery.js';
 import { startEvenHubCleanup } from './evenhub/cleanup.js';
 import { EvenHubReadiness } from './evenhub/readiness.js';
 import { EvenHubBenchmarkCapture } from './evenhub/benchmark-capture.js';
+import { getActiveContainerDelivery } from './evenhub/reply-correlation.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -689,8 +690,17 @@ async function startMessageLoop(): Promise<void> {
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
+          const activeContainerDelivery = getActiveContainerDelivery(
+            messagesToSend,
+            getEvenTurnsForChat(chatJid, ['running']).length > 0,
+          );
+          const piped =
+            activeContainerDelivery !== 'queue' &&
+            queue.sendMessage(chatJid, formatted, {
+              requireIdle: activeContainerDelivery === 'pipe-when-idle',
+            });
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          if (piped) {
             markCorrelatedTurnsRunning(messagesToSend);
             logger.debug(
               { chatJid, count: messagesToSend.length },
@@ -706,7 +716,7 @@ async function startMessageLoop(): Promise<void> {
                 logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
               );
           } else {
-            // No active container — enqueue for a new one
+            // No safe active-container boundary — enqueue for a new run.
             queue.enqueueMessageCheck(chatJid);
           }
         }

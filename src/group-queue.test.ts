@@ -1,3 +1,5 @@
+import type { ChildProcess } from 'child_process';
+
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 import { GroupQueue } from './group-queue.js';
@@ -304,7 +306,7 @@ describe('GroupQueue', () => {
     // Register a process so closeStdin has a groupFolder
     queue.registerProcess(
       'group1@g.us',
-      {} as any,
+      {} as ChildProcess,
       'container-1',
       'test-group',
     );
@@ -407,6 +409,55 @@ describe('GroupQueue', () => {
     expect(closeWrites).toHaveLength(0);
 
     resolveProcess!();
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('queues an isolated reply behind busy work and drains it as soon as the container becomes idle', async () => {
+    const fs = await import('fs');
+    const completions: Array<() => void> = [];
+    const processMessages = vi.fn(
+      async () =>
+        new Promise<boolean>((resolve) =>
+          completions.push(() => resolve(true)),
+        ),
+    );
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    queue.registerProcess(
+      'group1@g.us',
+      {} as ChildProcess,
+      'container-1',
+      'test-group',
+    );
+
+    const writeFileSync = vi.mocked(fs.default.writeFileSync);
+    const renameSync = vi.mocked(fs.default.renameSync);
+    writeFileSync.mockClear();
+    renameSync.mockClear();
+
+    expect(
+      queue.sendMessage('group1@g.us', 'EvenHub prompt', {
+        requireIdle: true,
+      }),
+    ).toBe(false);
+    expect(renameSync).not.toHaveBeenCalled();
+
+    queue.enqueueMessageCheck('group1@g.us');
+    queue.notifyIdle('group1@g.us');
+
+    expect(
+      writeFileSync.mock.calls.some(
+        (call) => typeof call[0] === 'string' && call[0].endsWith('_close'),
+      ),
+    ).toBe(true);
+
+    completions[0]();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(processMessages).toHaveBeenCalledTimes(2);
+
+    completions[1]();
     await vi.advanceTimersByTimeAsync(10);
   });
 

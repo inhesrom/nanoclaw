@@ -27,6 +27,10 @@ interface GroupState {
   retryCount: number;
 }
 
+interface SendMessageOptions {
+  requireIdle?: boolean;
+}
+
 export class GroupQueue {
   private groups = new Map<string, GroupState>();
   private activeCount = 0;
@@ -71,6 +75,9 @@ export class GroupQueue {
 
     if (state.active) {
       state.pendingMessages = true;
+      if (state.idleWaiting) {
+        this.closeStdin(groupJid);
+      }
       logger.debug({ groupJid }, 'Container active, message queued');
       return;
     }
@@ -148,23 +155,33 @@ export class GroupQueue {
 
   /**
    * Mark the container as idle-waiting (finished work, waiting for IPC input).
-   * If tasks are pending, preempt the idle container immediately.
+   * If work is pending, preempt the idle container immediately.
    */
   notifyIdle(groupJid: string): void {
     const state = this.getGroup(groupJid);
     state.idleWaiting = true;
-    if (state.pendingTasks.length > 0) {
+    if (state.pendingTasks.length > 0 || state.pendingMessages) {
       this.closeStdin(groupJid);
     }
   }
 
   /**
    * Send a follow-up message to the active container via IPC file.
-   * Returns true if the message was written, false if no active container.
+   * Returns true if the message was written, false if the active container is
+   * unavailable or does not satisfy the requested idle boundary.
    */
-  sendMessage(groupJid: string, text: string): boolean {
+  sendMessage(
+    groupJid: string,
+    text: string,
+    options: SendMessageOptions = {},
+  ): boolean {
     const state = this.getGroup(groupJid);
-    if (!state.active || !state.groupFolder || state.isTaskContainer)
+    if (
+      !state.active ||
+      !state.groupFolder ||
+      state.isTaskContainer ||
+      (options.requireIdle && !state.idleWaiting)
+    )
       return false;
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 

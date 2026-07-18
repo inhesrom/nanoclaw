@@ -79,6 +79,13 @@ sudo install -o root -g root -m 0600 deploy/evenhub/config/evenhub.env.template 
 # Before restarting, replace REPLACE_WITH_TAILSCALE_HTTPS_ORIGIN in the
 # installed file with the same origin used by evenhub/.env.private.
 sudoedit /etc/nanoclaw/evenhub.env
+sudo install -d -o root -g root -m 0755 /etc/nftables.d
+sudo install -o root -g root -m 0644 \
+  deploy/evenhub/firewall/nanoclaw-evenhub.nft.template \
+  /etc/nftables.d/nanoclaw-evenhub.nft
+# Replace REPLACE_LAN_INTERFACE and the documentation subnet 192.0.2.0/24
+# with the deployment's real LAN interface and subnet before validation.
+sudoedit /etc/nftables.d/nanoclaw-evenhub.nft
 sudo install -o root -g root -m 0644 \
   deploy/evenhub/systemd/nanoclaw-evenhub-firewall.service \
   /etc/systemd/system/nanoclaw-evenhub-firewall.service

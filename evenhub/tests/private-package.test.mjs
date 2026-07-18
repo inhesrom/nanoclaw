@@ -11,6 +11,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  buildPrivatePackages,
   readPrivateOrigin,
   renderPrivateManifest,
   validateTailnetOrigin,
@@ -31,6 +32,27 @@ function workspace() {
 }
 
 describe('private EvenHub package configuration', () => {
+  it('runs an independent client build for each reproducibility artifact', () => {
+    const events = [];
+    buildPrivatePackages(
+      'https://nanoclaw.example.ts.net',
+      '/tmp/app.json',
+      ['/tmp/first.ehpk', '/tmp/second.ehpk'],
+      {
+        buildClient: (origin) => events.push(['build', origin]),
+        packManifest: (manifest, output) =>
+          events.push(['pack', manifest, output]),
+      },
+    );
+
+    expect(events).toEqual([
+      ['build', 'https://nanoclaw.example.ts.net'],
+      ['pack', '/tmp/app.json', '/tmp/first.ehpk'],
+      ['build', 'https://nanoclaw.example.ts.net'],
+      ['pack', '/tmp/app.json', '/tmp/second.ehpk'],
+    ]);
+  });
+
   it('accepts only canonical HTTPS tailnet origins', () => {
     expect(validateTailnetOrigin('https://nanoclaw.example.ts.net')).toBe(
       'https://nanoclaw.example.ts.net',

@@ -4,8 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
-  buildPrivateClient,
-  packPrivateManifest,
+  buildPrivatePackages,
   readPrivateOrigin,
   renderPrivateManifest,
 } from './private-package.mjs';
@@ -22,10 +21,7 @@ try {
   const first = path.join(workspace, 'first.ehpk');
   const second = path.join(workspace, 'second.ehpk');
   renderPrivateManifest(origin, manifest);
-  buildPrivateClient(origin);
-  for (const output of [first, second]) {
-    packPrivateManifest(manifest, output);
-  }
+  buildPrivatePackages(origin, manifest, [first, second]);
 
   const firstDigest = digest(first);
   const secondDigest = digest(second);

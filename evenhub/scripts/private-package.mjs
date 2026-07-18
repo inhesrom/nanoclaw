@@ -3,6 +3,7 @@ import {
   chmodSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -106,6 +107,7 @@ function filesBelow(directory) {
 
 export function buildPrivateClient(origin) {
   const approvedOrigin = validateTailnetOrigin(origin);
+  rmSync(distPath, { recursive: true, force: true });
   execFileSync('npm', ['run', 'build'], {
     cwd: evenhubRoot,
     env: { ...process.env, VITE_EVENHUB_ORIGIN: approvedOrigin },
@@ -125,4 +127,17 @@ export function packPrivateManifest(manifestPath, outputPath) {
     stdio: 'inherit',
   });
   chmodSync(outputPath, 0o600);
+}
+
+export function buildPrivatePackages(
+  origin,
+  manifestPath,
+  outputPaths,
+  { buildClient = buildPrivateClient, packManifest = packPrivateManifest } = {},
+) {
+  const approvedOrigin = validateTailnetOrigin(origin);
+  for (const outputPath of outputPaths) {
+    buildClient(approvedOrigin);
+    packManifest(manifestPath, outputPath);
+  }
 }

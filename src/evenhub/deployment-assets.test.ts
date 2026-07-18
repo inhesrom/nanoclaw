@@ -15,6 +15,17 @@ const read = (...parts: string[]) =>
   fs.readFileSync(path.join(deploy, ...parts), 'utf8');
 
 describe('EvenHub deployment assets', () => {
+  it('documents a valid private origin in the root environment sample', () => {
+    const example = fs.readFileSync(path.join(root, '.env.example'), 'utf8');
+    expect(example).toContain('# Tailscale-only EvenHub G2 bridge');
+    expect(example).toContain(
+      'EVENHUB_PUBLIC_ORIGIN=https://nanoclaw.example.ts.net',
+    );
+    expect(example).not.toContain(
+      'EVENHUB_PUBLIC_ORIGIN=https://nanoclaw.local',
+    );
+  });
+
   it('tracks a fail-closed runtime environment template', () => {
     expect(read('config', 'evenhub.env.template').trim().split('\n')).toEqual([
       'EVENHUB_ENABLED=true',
@@ -279,5 +290,14 @@ describe('EvenHub deployment assets', () => {
     expect(guide).toContain('EVENHUB_ENABLED=false');
     expect(guide).toContain('pack:verify');
     expect(guide).toContain('root.crt');
+
+    const tailscaleGuide = fs.readFileSync(
+      path.join(root, 'docs', 'evenhub-tailscale-deployment.md'),
+      'utf8',
+    );
+    expect(tailscaleGuide).toContain(
+      'deploy/evenhub/firewall/nanoclaw-evenhub.nft.template',
+    );
+    expect(tailscaleGuide).toContain('/etc/nftables.d/nanoclaw-evenhub.nft');
   });
 });
