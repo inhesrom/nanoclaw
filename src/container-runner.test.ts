@@ -106,7 +106,11 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import {
+  redactContainerArgsForLogging,
+  runContainerAgent,
+  ContainerOutput,
+} from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -122,6 +126,31 @@ const testInput = {
   chatJid: 'test@g.us',
   isMain: false,
 };
+
+describe('container argument logging', () => {
+  it('redacts injected proxy credentials and API keys', () => {
+    const token = 'aoc_this_must_never_appear_in_logs';
+    const result = redactContainerArgsForLogging([
+      'run',
+      '-e',
+      `HTTPS_PROXY=http://x:${token}@host.docker.internal:10255`,
+      '-e',
+      'ANTHROPIC_API_KEY=placeholder',
+      '-e',
+      'TZ=America/New_York',
+      '--env=AUTH_TOKEN=another-secret',
+      'nanoclaw-agent:latest',
+    ]);
+
+    expect(result).not.toContain(token);
+    expect(result).not.toContain('placeholder');
+    expect(result).not.toContain('another-secret');
+    expect(result).toContain('HTTPS_PROXY=[REDACTED]');
+    expect(result).toContain('ANTHROPIC_API_KEY=[REDACTED]');
+    expect(result).toContain('--env=AUTH_TOKEN=[REDACTED]');
+    expect(result).toContain('TZ=America/New_York');
+  });
+});
 
 function emitOutputMarker(
   proc: ReturnType<typeof createFakeProcess>,

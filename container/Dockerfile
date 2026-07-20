@@ -30,8 +30,9 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser, claude-code, the MCP tool servers (Calendar, Gmail, Sheets),
-# and Codex CLI globally. Pre-installing MCPs (vs `npx -y` at spawn) avoids a ~16s cold
+# Install agent-browser, claude-code, the third-party MCP tool servers (Calendar,
+# Gmail, Sheets), and Codex CLI globally. Pre-installing MCPs (vs `npx -y` at spawn)
+# avoids a ~16s cold
 # download per ephemeral spawn that races past the Agent SDK's MCP-connection window.
 # Codex's --json schema and auth.json were verified against codex-cli 0.142.5 (pin
 # @openai/codex if a future release drifts). Either runtime runs (NANOCLAW_RUNTIME).

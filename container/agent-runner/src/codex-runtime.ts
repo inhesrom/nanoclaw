@@ -79,7 +79,7 @@ function codexSettingArgs(
 /**
  * Write ~/.codex/config.toml wiring the same stdio MCP servers the Claude path
  * uses, and disabling Codex's own sandbox/approvals (the container already isolates).
- * External tool servers (gcal, github, gmail, sheets) come from the shared
+ * External tool servers (gcal, gdocs, github, gmail, sheets) come from the shared
  * definitions in mcp-servers.ts; Codex does NOT pass the parent env to MCP
  * subprocesses, so the builder enumerates the gateway proxy/CA vars explicitly.
  */

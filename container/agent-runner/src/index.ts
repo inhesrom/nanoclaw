@@ -502,7 +502,7 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        // External tool servers (gcal, github, gmail, sheets) — one pattern per
+        // External tool servers (gcal, gdocs, github, gmail, sheets) — one pattern per
         // active server, defined once in mcp-servers.ts for both runtimes.
         ...allowedMcpToolPatterns(),
       ],

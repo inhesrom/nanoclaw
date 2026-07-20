@@ -1,7 +1,7 @@
 /**
  * Shared MCP server definitions for both agent runtimes.
  *
- * Each external tool server (calendar, github, gmail, sheets) is described once here
+ * Each external tool server (calendar, Docs, github, gmail, sheets) is described once here
  * and consumed by:
  *   - the Claude path (index.ts): buildClaudeMcpServers() -> query() `mcpServers`,
  *     plus allowedMcpToolPatterns() -> `allowedTools`
@@ -73,6 +73,19 @@ export const MCP_SERVERS: McpServerDef[] = [
     nodePreload: true, // uses gaxios v7 / native fetch
     credentialCheckPath:
       '/home/node/.config/google-calendar-mcp/gcp-oauth.keys.json',
+  },
+  {
+    // NanoClaw's Google Docs/Drive adapter. It sends a non-secret placeholder
+    // bearer token; OneCLI replaces it for docs.googleapis.com and for the
+    // adapter's read-only www.googleapis.com/drive/v3/files discovery calls.
+    name: 'gdocs',
+    command: 'node',
+    args: ['/tmp/dist/gdocs-mcp.js'],
+    env: {
+      GOOGLE_API_ACCESS_TOKEN: 'placeholder',
+    },
+    proxyEnv: true,
+    nodePreload: true,
   },
   {
     // GitHub official MCP (Go binary from github/github-mcp-server releases).

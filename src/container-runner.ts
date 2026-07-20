@@ -41,6 +41,39 @@ const onecli = new OneCLI({ url: ONECLI_URL });
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
+const SENSITIVE_CONTAINER_ENV =
+  /(?:proxy|token|secret|password|credential|api_?key|authorization|auth)/i;
+
+/** Preserve useful Docker diagnostics without persisting injected credentials. */
+export function redactContainerArgsForLogging(args: string[]): string {
+  return args
+    .map((arg, index) => {
+      if (args[index - 1] === '-e' || args[index - 1] === '--env') {
+        const equalsIndex = arg.indexOf('=');
+        if (equalsIndex !== -1) {
+          const name = arg.slice(0, equalsIndex);
+          if (SENSITIVE_CONTAINER_ENV.test(name)) {
+            return `${name}=[REDACTED]`;
+          }
+        }
+      }
+
+      if (arg.startsWith('--env=')) {
+        const assignment = arg.slice('--env='.length);
+        const equalsIndex = assignment.indexOf('=');
+        if (equalsIndex !== -1) {
+          const name = assignment.slice(0, equalsIndex);
+          if (SENSITIVE_CONTAINER_ENV.test(name)) {
+            return `--env=${name}=[REDACTED]`;
+          }
+        }
+      }
+
+      return arg.replace(/(https?:\/\/[^:\s]+:)[^@\s]+@/gi, '$1[REDACTED]@');
+    })
+    .join(' ');
+}
+
 export interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -487,7 +520,7 @@ export async function runContainerAgent(
         (m) =>
           `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
       ),
-      containerArgs: containerArgs.join(' '),
+      containerArgs: redactContainerArgsForLogging(containerArgs),
     },
     'Container mount configuration',
   );
@@ -717,7 +750,7 @@ export async function runContainerAgent(
         }
         logLines.push(
           `=== Container Args ===`,
-          containerArgs.join(' '),
+          redactContainerArgsForLogging(containerArgs),
           ``,
           `=== Mounts ===`,
           mounts
