@@ -186,3 +186,37 @@ environment, firewall, hostname, and units from the pre-Tailscale snapshot,
 then restart the firewall and NanoClaw. Reinstall the prior private package only
 if application rollback is required. Do not delete turns, model/runtime files,
 snapshots, logs, or the retained LAN Caddy configuration.
+
+## Automated installation
+
+`deploy/evenhub/install.sh` performs the steps above in order: it snapshots,
+installs Moonshine (skipping if already present), renders and installs the
+environment, firewall, units, and Serve, validates before activating, starts
+services in dependency order, and builds the private client. It runs as root
+(`sudo deploy/evenhub/install.sh`) and is arm64-Linux-only.
+
+It pauses at the gates that genuinely need you: Tailscale login, the
+admin-console HTTPS-certificate enable (with its Certificate-Transparency
+disclosure), the phone sideload, and the physical G2 smoke checklist. The
+concrete `ts.net` origin is derived from `tailscale status` (override with
+`--origin`); it is written only to the ignored `.env.private` and the installed
+`/etc/nanoclaw/evenhub.env`, never into the repository.
+
+Because the `nanoclaw.service.d` drop-in requires a **system** `nanoclaw.service`
+(it uses `Requires=` and an `EnvironmentFile`), the installer migrates a
+bootstrap-installed `--user` unit to a system unit automatically.
+
+```bash
+sudo deploy/evenhub/install.sh                 # interactive
+sudo deploy/evenhub/install.sh --origin https://nanoclaw.example.ts.net --yes
+sudo deploy/evenhub/install.sh --disable       # rollback fast-path
+sudo deploy/evenhub/verify.sh                  # standalone end-to-end check
+```
+
+Flags: `--origin`, `--lan-interface`, `--lan-subnet`, `--lan-address`,
+`--no-lan` (skip the LAN diagnostics module), `--stt-profile <path>` (install a
+benchmarked profile instead of the provisional candidate), `--skip-client-build`,
+`--yes` (non-interactive; fail at any unmet gate), `--disable`. Re-runs are
+idempotent (render → compare → skip-or-back-up), replaced files are preserved in
+the snapshot run directory, and there is no automatic rollback — that stays
+manual, per the Rollback section above.

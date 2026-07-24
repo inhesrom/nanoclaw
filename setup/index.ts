@@ -9,8 +9,10 @@ const STEPS: Record<
   string,
   () => Promise<{ run: (args: string[]) => Promise<void> }>
 > = {
+  bootstrap: () => import('./bootstrap.js'),
   timezone: () => import('./timezone.js'),
   environment: () => import('./environment.js'),
+  onecli: () => import('./onecli.js'),
   container: () => import('./container.js'),
   groups: () => import('./groups.js'),
   register: () => import('./register.js'),

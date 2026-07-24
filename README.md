@@ -45,6 +45,16 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 
 > **Note:** Commands prefixed with `/` (like `/setup`, `/add-whatsapp`) are [Claude Code skills](https://code.claude.com/docs/en/skills). Type them inside the `claude` CLI prompt, not in your regular terminal. If you don't have Claude Code installed, get it at [claude.com/product/claude-code](https://claude.com/product/claude-code).
 
+### One-command install
+
+If you'd rather not drive setup through Claude Code, run the deterministic bootstrap from a clean clone:
+
+```bash
+./bootstrap.sh
+```
+
+It takes you from a clean clone to a running service, chaining the same setup steps and pausing only at the gates that genuinely need you: installing Docker (sudo), entering your Anthropic secret, and scanning the WhatsApp QR. Re-running it is safe — completed steps are detected and skipped. Add `--with-evenhub` to also install the EvenHub voice stack, or `--non-interactive` for headless provisioning (see [docs/BOOTSTRAP.md](docs/BOOTSTRAP.md)). `/setup` remains the AI-guided path for first-timers and `/debug` the fallback when something needs fixing.
+
 ## Philosophy
 
 **Small enough to understand.** One process, a few source files and no microservices. If you want to understand the full NanoClaw codebase, just ask Claude Code to walk you through it.

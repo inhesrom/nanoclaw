@@ -279,3 +279,21 @@ Do not delete SQLite rows, model/runtime files, snapshots, corpus, reports, or
 logs until rollback review is complete. Re-enabling requires fresh runtime,
 benchmark, hash, TLS, firewall, log-content, revoke/re-pair, and physical G2
 acceptance checks.
+
+## Automated installation
+
+The LAN diagnostic module (Caddy on the fixed LAN address, Avahi, the LAN accept
+rule) is installed by `deploy/evenhub/install.sh` as part of the
+[Tailscale deployment](evenhub-tailscale-deployment.md) — it is on by default and
+skipped with `--no-lan`. The installer autodetects the LAN interface, subnet, and
+address (override with `--lan-interface`, `--lan-subnet`, `--lan-address`) and
+renders the tracked templates in place.
+
+The STT profile is the one part that stays manual: on a fresh install the script
+stages the **candidate** profile at `/etc/nanoclaw/stt-selected-profile.json`
+with a loud provisional warning. Run the physical benchmark and `select-profile`
+process described above, then install the vetted profile with
+`sudo deploy/evenhub/install.sh --stt-profile <path>` before treating it as
+production. `deploy/evenhub/verify.sh` exercises the LAN route end-to-end
+(`--cacert` + `--resolve` against `nanoclaw.local`) alongside the Tailscale and
+boundary checks.

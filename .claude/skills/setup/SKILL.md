@@ -7,6 +7,8 @@ description: Run initial NanoClaw setup. Use when user wants to install dependen
 
 Run setup steps automatically. Only pause when user action is required (channel authentication, configuration choices). Setup uses `bash setup.sh` for bootstrap, then `npx tsx setup/index.ts --step <name>` for all other steps. Steps emit structured status blocks to stdout. Verbose logs go to `logs/setup.log`.
 
+> A non-interactive alternative exists: `./bootstrap.sh` chains these same steps from a clean clone to a running service (see [docs/BOOTSTRAP.md](../../../docs/BOOTSTRAP.md)). Prefer this AI-guided flow for first-timers; offer `./bootstrap.sh` when the user wants a scripted or headless install, or to resume/repair one.
+
 **Principle:** When something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their manual action (e.g. authenticating a channel, pasting a secret token). If a dependency is missing, install it. If a service won't start, diagnose and repair. Ask the user for permission when needed, then do the work.
 
 **UX Note:** Use `AskUserQuestion` for multiple-choice questions only (e.g. "Docker or Apple Container?", "which channels?"). Do NOT use it when free-text input is needed (e.g. phone numbers, tokens, paths) — just ask the question in plain text and wait for the user's reply.

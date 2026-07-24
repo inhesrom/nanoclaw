@@ -14,17 +14,11 @@ import Database from 'better-sqlite3';
 import { STORE_DIR } from '../src/config.js';
 import { readEnvFile } from '../src/env.js';
 import { logger } from '../src/logger.js';
-import {
-  getPlatform,
-  getServiceManager,
-  hasSystemd,
-  isRoot,
-} from './platform.js';
+import { getServiceManager, isRoot } from './platform.js';
 import { emitStatus } from './status.js';
 
 export async function run(_args: string[]): Promise<void> {
   const projectRoot = process.cwd();
-  const platform = getPlatform();
   const homeDir = os.homedir();
 
   logger.info('Starting verification');
@@ -48,20 +42,27 @@ export async function run(_args: string[]): Promise<void> {
       // launchctl not available
     }
   } else if (mgr === 'systemd') {
-    const prefix = isRoot() ? 'systemctl' : 'systemctl --user';
-    try {
-      execSync(`${prefix} is-active nanoclaw`, { stdio: 'ignore' });
-      service = 'running';
-    } catch {
+    // A non-root install normally uses a --user unit, but some setups run a
+    // system unit (e.g. after the EvenHub installer migrates to one). Check the
+    // user manager first, then fall back to the system manager so either is
+    // reported correctly.
+    const prefixes = isRoot()
+      ? ['systemctl']
+      : ['systemctl --user', 'systemctl'];
+    for (const prefix of prefixes) {
       try {
-        const output = execSync(`${prefix} list-unit-files`, {
-          encoding: 'utf-8',
-        });
-        if (output.includes('nanoclaw')) {
-          service = 'stopped';
-        }
+        execSync(`${prefix} is-active nanoclaw`, { stdio: 'ignore' });
+        service = 'running';
+        break;
       } catch {
-        // systemctl not available
+        try {
+          const output = execSync(`${prefix} list-unit-files`, {
+            encoding: 'utf-8',
+          });
+          if (output.includes('nanoclaw')) service = 'stopped';
+        } catch {
+          // systemctl not available at this scope
+        }
       }
     }
   } else {
@@ -101,7 +102,11 @@ export async function run(_args: string[]): Promise<void> {
   const envFile = path.join(projectRoot, '.env');
   if (fs.existsSync(envFile)) {
     const envContent = fs.readFileSync(envFile, 'utf-8');
-    if (/^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ONECLI_URL)=/m.test(envContent)) {
+    if (
+      /^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ONECLI_URL)=/m.test(
+        envContent,
+      )
+    ) {
       credentials = 'configured';
     }
   }
@@ -165,12 +170,35 @@ export async function run(_args: string[]): Promise<void> {
     mountAllowlist = 'configured';
   }
 
-  // Determine overall status
+  // 7. Check OneCLI gateway reachability (only when configured).
+  // Any HTTP response proves the gateway is serving; not every version exposes
+  // /health, so a 404 there still counts as reachable. Only a connection error
+  // means it's down.
+  let gateway = 'not_configured';
+  const onecliUrl = readEnvFile(['ONECLI_URL']).ONECLI_URL;
+  if (onecliUrl) {
+    gateway = 'unreachable';
+    for (const probe of [`${onecliUrl}/health`, onecliUrl]) {
+      try {
+        const res = await fetch(probe, { signal: AbortSignal.timeout(3000) });
+        if (res.ok || probe === onecliUrl) {
+          gateway = 'reachable';
+          break;
+        }
+      } catch {
+        // Try next probe
+      }
+    }
+  }
+
+  // Determine overall status. A configured-but-unreachable gateway is a failure
+  // (containers would get no credentials); an unconfigured gateway is ignored.
   const status =
     service === 'running' &&
     credentials !== 'missing' &&
     anyChannelConfigured &&
-    registeredGroups > 0
+    registeredGroups > 0 &&
+    gateway !== 'unreachable'
       ? 'success'
       : 'failed';
 
@@ -180,6 +208,7 @@ export async function run(_args: string[]): Promise<void> {
     SERVICE: service,
     CONTAINER_RUNTIME: containerRuntime,
     CREDENTIALS: credentials,
+    GATEWAY: gateway,
     CONFIGURED_CHANNELS: configuredChannels.join(','),
     CHANNEL_AUTH: JSON.stringify(channelAuth),
     REGISTERED_GROUPS: registeredGroups,
