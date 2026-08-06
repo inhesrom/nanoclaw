@@ -30,7 +30,10 @@ function generatePlist(
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -55,12 +58,14 @@ function generateSystemdUnit(
   return `[Unit]
 Description=NanoClaw Personal Assistant
 After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
 ExecStart=${nodePath} ${projectRoot}/dist/index.js
 WorkingDirectory=${projectRoot}
-Restart=always
+Restart=on-failure
 RestartSec=5
 KillMode=process
 Environment=HOME=${homeDir}
@@ -132,15 +137,28 @@ describe('systemd unit generation', () => {
     expect(unit).toContain('WantedBy=multi-user.target');
   });
 
-  it('contains restart policy', () => {
+  it('contains restart policy that avoids infinite auth-failure loops', () => {
     const unit = generateSystemdUnit(
       '/usr/bin/node',
       '/home/user/nanoclaw',
       '/home/user',
       false,
     );
-    expect(unit).toContain('Restart=always');
+    expect(unit).toContain('Restart=on-failure');
     expect(unit).toContain('RestartSec=5');
+    expect(unit).toContain('StartLimitIntervalSec=300');
+    expect(unit).toContain('StartLimitBurst=10');
+    expect(unit).not.toContain('Restart=always');
+  });
+
+  it('launchd KeepAlive does not restart clean exits', () => {
+    const plist = generatePlist(
+      '/usr/local/bin/node',
+      '/home/user/nanoclaw',
+      '/home/user',
+    );
+    expect(plist).toContain('<key>SuccessfulExit</key>');
+    expect(plist).toContain('<false/>');
   });
 
   it('uses KillMode=process to preserve detached children', () => {

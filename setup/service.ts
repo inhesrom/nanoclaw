@@ -97,7 +97,10 @@ function setupLaunchd(
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -233,15 +236,19 @@ function setupSystemd(
     systemctlPrefix = 'systemctl --user';
   }
 
+  // Restart=on-failure (not always): permanent auth failures that exit 0 must not loop.
+  // StartLimit* caps runaway crash loops even if a future bug exits non-zero tightly.
   const unit = `[Unit]
 Description=NanoClaw Personal Assistant
 After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
 ExecStart=${nodePath} ${projectRoot}/dist/index.js
 WorkingDirectory=${projectRoot}
-Restart=always
+Restart=on-failure
 RestartSec=5
 KillMode=process
 Environment=HOME=${homeDir}

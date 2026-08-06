@@ -50,6 +50,68 @@ import { registerChannel, ChannelOpts } from './registry.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+const AUTH_STATUS_NEEDS_REAUTH = 'needs-reauth';
+const AUTH_STATUS_LOGGED_OUT = 'logged-out';
+const AUTH_STATUS_BLOCKED = new Set([
+  AUTH_STATUS_NEEDS_REAUTH,
+  AUTH_STATUS_LOGGED_OUT,
+]);
+
+function authDir(): string {
+  return path.join(STORE_DIR, 'auth');
+}
+
+function authStatusPath(): string {
+  return path.join(STORE_DIR, 'auth-status.txt');
+}
+
+function credsPath(): string {
+  return path.join(authDir(), 'creds.json');
+}
+
+/** True when local WhatsApp multi-device credentials look usable. */
+export function hasUsableWhatsAppAuth(): boolean {
+  try {
+    if (fs.existsSync(authStatusPath())) {
+      const status = fs.readFileSync(authStatusPath(), 'utf8').trim();
+      if (AUTH_STATUS_BLOCKED.has(status)) {
+        return false;
+      }
+    }
+    return fs.existsSync(credsPath());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Clear local WhatsApp session so a restart cannot thrash on dead creds.
+ * Leaves auth-status.txt for operators and the channel factory.
+ */
+export function invalidateWhatsAppAuth(
+  reason: 'logged-out' | 'needs-reauth',
+): void {
+  const dir = authDir();
+  try {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      authStatusPath(),
+      reason === 'logged-out'
+        ? AUTH_STATUS_LOGGED_OUT
+        : AUTH_STATUS_NEEDS_REAUTH,
+    );
+    logger.error(
+      { reason, authDir: dir },
+      'WhatsApp auth invalidated. Run npm run auth (or /setup) to re-link.',
+    );
+  } catch (err) {
+    logger.error({ err, reason }, 'Failed to invalidate WhatsApp auth state');
+  }
+}
+
 export interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
@@ -74,8 +136,13 @@ export class WhatsAppChannel implements Channel {
   >();
   /** Bot's LID user ID (e.g. "80355281346633") for normalizing group mentions. */
   private botLidUser?: string;
-  /** Resolve the initial connect() once the first successful open happens. */
-  private pendingFirstOpen?: () => void;
+  /** Settle the initial connect() once the first open or permanent auth failure happens. */
+  private pendingFirstOpen?: {
+    resolve: () => void;
+    reject: (err: Error) => void;
+  };
+  /** After permanent logout/QR, refuse further reconnect attempts. */
+  private authInvalidated = false;
 
   private opts: WhatsAppChannelOpts;
 
@@ -85,16 +152,47 @@ export class WhatsAppChannel implements Channel {
 
   async connect(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this.pendingFirstOpen = resolve;
+      this.pendingFirstOpen = { resolve, reject };
       this.connectInternal().catch(reject);
     });
   }
 
-  private async connectInternal(): Promise<void> {
-    const authDir = path.join(STORE_DIR, 'auth');
-    fs.mkdirSync(authDir, { recursive: true });
+  /**
+   * Permanent auth failure: clear session, keep the process alive, settle connect().
+   * Must never process.exit — systemd Restart=always would create a crash loop.
+   */
+  private handlePermanentAuthFailure(
+    reason: 'logged-out' | 'needs-reauth',
+    message: string,
+  ): void {
+    if (this.authInvalidated) return;
+    this.authInvalidated = true;
+    this.connected = false;
 
-    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    logger.error(message);
+    invalidateWhatsAppAuth(reason);
+
+    try {
+      this.sock?.end(undefined);
+    } catch {
+      // Socket may already be closed.
+    }
+
+    if (this.pendingFirstOpen) {
+      this.pendingFirstOpen.reject(new Error(message));
+      this.pendingFirstOpen = undefined;
+    }
+  }
+
+  private async connectInternal(): Promise<void> {
+    if (this.authInvalidated) {
+      return;
+    }
+
+    const waAuthDir = authDir();
+    fs.mkdirSync(waAuthDir, { recursive: true });
+
+    const { state, saveCreds } = await useMultiFileAuthState(waAuthDir);
 
     const { version } = await fetchLatestWaWebVersion({}).catch((err) => {
       logger.warn(
@@ -147,12 +245,13 @@ export class WhatsAppChannel implements Channel {
 
       if (qr) {
         const msg =
-          'WhatsApp authentication required. Run /setup in Claude Code.';
-        logger.error(msg);
+          'WhatsApp authentication required. Run npm run auth (or /setup) to re-link.';
+        // Best-effort desktop notification on macOS; harmless no-op failure on Linux.
         exec(
           `osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`,
         );
-        setTimeout(() => process.exit(1), 1000);
+        this.handlePermanentAuthFailure('needs-reauth', msg);
+        return;
       }
 
       if (connection === 'close') {
@@ -160,7 +259,8 @@ export class WhatsAppChannel implements Channel {
         const reason = (
           lastDisconnect?.error as { output?: { statusCode?: number } }
         )?.output?.statusCode;
-        const shouldReconnect = reason !== DisconnectReason.loggedOut;
+        const shouldReconnect =
+          !this.authInvalidated && reason !== DisconnectReason.loggedOut;
         logger.info(
           {
             reason,
@@ -175,17 +275,24 @@ export class WhatsAppChannel implements Channel {
           this.connectInternal().catch((err) => {
             logger.error({ err }, 'Failed to reconnect, retrying in 5s');
             setTimeout(() => {
+              if (this.authInvalidated) return;
               this.connectInternal().catch((err2) => {
                 logger.error({ err: err2 }, 'Reconnection retry failed');
               });
             }, 5000);
           });
-        } else {
-          logger.info('Logged out. Run /setup to re-authenticate.');
-          process.exit(0);
+        } else if (
+          reason === DisconnectReason.loggedOut ||
+          this.authInvalidated
+        ) {
+          this.handlePermanentAuthFailure(
+            'logged-out',
+            'WhatsApp logged out (401). Auth cleared — run npm run auth (or /setup) to re-link. Process staying up.',
+          );
         }
       } else if (connection === 'open') {
         this.connected = true;
+        this.authInvalidated = false;
         logger.info('Connected to WhatsApp');
 
         // Announce availability so WhatsApp relays subsequent presence updates (typing indicators)
@@ -225,7 +332,7 @@ export class WhatsAppChannel implements Channel {
 
         // Signal first connection to caller
         if (this.pendingFirstOpen) {
-          this.pendingFirstOpen();
+          this.pendingFirstOpen.resolve();
           this.pendingFirstOpen = undefined;
         }
       }
@@ -599,4 +706,12 @@ export class WhatsAppChannel implements Channel {
   }
 }
 
-registerChannel('whatsapp', (opts: ChannelOpts) => new WhatsAppChannel(opts));
+registerChannel('whatsapp', (opts: ChannelOpts) => {
+  if (!hasUsableWhatsAppAuth()) {
+    logger.warn(
+      'WhatsApp credentials missing or marked needs-reauth — skipping channel. Run npm run auth (or /setup).',
+    );
+    return null;
+  }
+  return new WhatsAppChannel(opts);
+});

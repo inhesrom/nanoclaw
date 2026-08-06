@@ -142,14 +142,37 @@ docker run -i --rm --entrypoint ls nanoclaw-agent:latest /workspace/extra/
 
 ```bash
 # Check if QR code was requested (means auth expired)
-grep 'QR\|authentication required\|qr' logs/nanoclaw.log | tail -5
+grep 'QR\|authentication required\|qr\|logged out\|Logged out\|needs-reauth' logs/nanoclaw.log | tail -20
 
-# Check auth files exist
+# Check auth files / operator status
 ls -la store/auth/
+cat store/auth-status.txt
 
-# Re-authenticate if needed
+# Re-authenticate if needed (service can stay running in degraded mode)
 npm run auth
+# then: sudo systemctl restart nanoclaw   # Linux system unit
 ```
+
+### Crash loop / WhatsApp 401 loggedOut
+
+If `systemctl show nanoclaw -p NRestarts` climbs every few seconds and logs show
+`Logged out` / `reason: 401`, the multi-device session is dead. Do **not** keep
+restarting with stale `store/auth`:
+
+```bash
+sudo systemctl stop nanoclaw
+mv store/auth "store/auth.broken-$(date +%Y%m%d)"
+mkdir -p store/auth
+echo needs-reauth > store/auth-status.txt
+npm run auth          # scan QR / pairing code
+sudo systemctl reset-failed nanoclaw
+sudo systemctl start nanoclaw
+# expect: Connected to WhatsApp, NRestarts stable
+```
+
+Prevention (post-fix): logout clears auth and does **not** `process.exit`;
+systemd uses `Restart=on-failure` + `StartLimitBurst` so permanent auth failure
+cannot thrash forever.
 
 ## Service Management
 

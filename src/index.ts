@@ -921,12 +921,27 @@ async function main(): Promise<void> {
       );
       continue;
     }
-    channels.push(channel);
-    await channel.connect();
+    try {
+      await channel.connect();
+      channels.push(channel);
+    } catch (err) {
+      logger.error(
+        { err, channel: channelName },
+        'Channel failed to connect — continuing without it',
+      );
+    }
   }
   if (channels.length === 0) {
-    logger.fatal('No channels connected');
-    process.exit(1);
+    // EvenHub (and other host subsystems) can still serve in degraded mode.
+    // Exiting here + systemd Restart=always caused multi-day crash loops on WhatsApp logout.
+    if (EVENHUB_ENABLED) {
+      logger.warn(
+        'No chat channels connected — running in degraded mode (EvenHub only). Re-authenticate messaging channels.',
+      );
+    } else {
+      logger.fatal('No channels connected');
+      process.exit(1);
+    }
   }
 
   // Start subsystems (independently of connection handler)
