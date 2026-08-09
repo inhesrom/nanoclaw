@@ -45,6 +45,8 @@ interface RuntimeAgentSettings {
 
 const CODEX_HOME = process.env.CODEX_HOME || '/home/node/.codex';
 const WORKDIR = '/workspace/group';
+/** Matches `[Image: attachments/…]` markers written by the host media pipeline. */
+const IMAGE_REF_PATTERN = /\[Image: (attachments\/[^\]]+)\]/g;
 const CODEX_REASONING_EFFORTS = [
   'minimal',
   'low',
@@ -53,6 +55,37 @@ const CODEX_REASONING_EFFORTS = [
   'xhigh',
 ] as const;
 type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+
+/** Prefer `.vision.jpg` sidecar when present. */
+function resolveVisionAbsolutePath(relativePath: string): string {
+  const dir = path.dirname(relativePath);
+  const base = path.basename(relativePath, path.extname(relativePath));
+  const visionRel = path.join(dir, `${base}.vision.jpg`);
+  const visionAbs = path.join(WORKDIR, visionRel);
+  if (fs.existsSync(visionAbs)) return visionAbs;
+  return path.join(WORKDIR, relativePath);
+}
+
+/**
+ * Build `codex exec -i <file>` args from `[Image: …]` markers in the prompt.
+ * Works for both fresh exec and `exec resume` (Codex accepts -i on resume).
+ */
+export function imageArgsFromPrompt(prompt: string): string[] {
+  const args: string[] = [];
+  const seen = new Set<string>();
+  IMAGE_REF_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = IMAGE_REF_PATTERN.exec(prompt)) !== null) {
+    const rel = match[1];
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const abs = resolveVisionAbsolutePath(rel);
+    if (fs.existsSync(abs)) {
+      args.push('-i', abs);
+    }
+  }
+  return args;
+}
 
 function isCodexReasoningEffort(
   effort: string | undefined,
@@ -154,11 +187,21 @@ function runCodexTurn(
   return new Promise((resolve, reject) => {
     // `codex exec resume` rejects --sandbox (it inherits sandbox from config.toml's
     // sandbox_mode); only a fresh `codex exec` accepts the flag.
+    // Both fresh and resume accept -i/--image for vision.
+    const imageArgs = imageArgsFromPrompt(prompt);
+    if (imageArgs.length > 0) {
+      deps.log(
+        `Attaching ${imageArgs.length / 2} image(s) to codex turn via -i`,
+      );
+    }
     const base = [
       '--json',
       '--skip-git-repo-check',
       ...codexSettingArgs(agentSettings),
+      ...imageArgs,
     ];
+    // Keep sessionId before flags (existing working order); Codex accepts -i
+    // both on fresh exec and resume.
     const args = sessionId
       ? ['exec', 'resume', sessionId, ...base, prompt]
       : ['exec', ...base, '--sandbox', 'danger-full-access', prompt];

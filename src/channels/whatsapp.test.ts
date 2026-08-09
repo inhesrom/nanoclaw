@@ -8,6 +8,26 @@ vi.mock('../config.js', () => ({
   STORE_DIR: '/tmp/nanoclaw-test-store',
   ASSISTANT_NAME: 'Andy',
   ASSISTANT_HAS_OWN_NUMBER: false,
+  GROUPS_DIR: '/tmp/test-groups',
+}));
+
+// Mock media module
+vi.mock('../media.js', () => ({
+  processImage: vi.fn().mockResolvedValue({
+    content: '[Image: attachments/img-test.jpg] photo caption',
+    relativePath: 'attachments/img-test.jpg',
+    visionRelativePath: 'attachments/img-test.vision.jpg',
+  }),
+  processVideo: vi.fn().mockReturnValue({
+    content: '[Video: attachments/vid-test.mp4 (1KB)]',
+    relativePath: 'attachments/vid-test.mp4',
+    visionRelativePath: '',
+  }),
+  processDocument: vi.fn().mockReturnValue({
+    content: '[PDF: attachments/doc.pdf (1KB)]',
+    relativePath: 'attachments/doc.pdf',
+    visionRelativePath: '',
+  }),
 }));
 
 // Mock logger
@@ -65,6 +85,7 @@ function createFakeSocket() {
     sendMessage: vi.fn().mockResolvedValue(undefined),
     sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
     groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
+    updateMediaMessage: vi.fn().mockResolvedValue(undefined),
     end: vi.fn(),
     // Expose the event emitter for triggering events in tests
     _ev: ev,
@@ -92,6 +113,7 @@ vi.mock('@whiskeysockets/baileys', () => {
     fetchLatestWaWebVersion: vi
       .fn()
       .mockResolvedValue({ version: [2, 3000, 0] }),
+    downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from('image-data')),
     normalizeMessageContent: vi.fn((content: unknown) => content),
     makeCacheableSignalKeyStore: vi.fn((keys: unknown) => keys),
     useMultiFileAuthState: vi.fn().mockResolvedValue({
@@ -112,6 +134,8 @@ import {
   invalidateWhatsAppAuth,
 } from './whatsapp.js';
 import { getLastGroupSync, updateChatName, setLastGroupSync } from '../db.js';
+import { processImage, processVideo } from '../media.js';
+import { downloadMediaMessage } from '@whiskeysockets/baileys';
 
 // --- Test helpers ---
 
@@ -149,6 +173,8 @@ function triggerDisconnect(statusCode: number) {
 async function triggerMessages(messages: unknown[]) {
   fakeSocket._ev.emit('messages.upsert', { messages });
   // Flush microtasks so the async messages.upsert handler completes
+  // (media path awaits download + processImage, so allow a few turns)
+  await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
 }
 
@@ -517,7 +543,7 @@ describe('WhatsAppChannel', () => {
       );
     });
 
-    it('extracts caption from imageMessage', async () => {
+    it('downloads image and delivers path marker with caption', async () => {
       const opts = createTestOpts();
       const channel = new WhatsAppChannel(opts);
 
@@ -542,13 +568,91 @@ describe('WhatsAppChannel', () => {
         },
       ]);
 
+      expect(downloadMediaMessage).toHaveBeenCalled();
+      expect(processImage).toHaveBeenCalled();
       expect(opts.onMessage).toHaveBeenCalledWith(
         'registered@g.us',
-        expect.objectContaining({ content: 'Check this photo' }),
+        expect.objectContaining({
+          content: '[Image: attachments/img-test.jpg] photo caption',
+        }),
       );
     });
 
-    it('extracts caption from videoMessage', async () => {
+    it('delivers image-only messages (no caption) via path marker', async () => {
+      vi.mocked(processImage).mockResolvedValueOnce({
+        content: '[Image: attachments/img-solo.jpg]',
+        relativePath: 'attachments/img-solo.jpg',
+        visionRelativePath: 'attachments/img-solo.vision.jpg',
+      });
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannel(channel);
+
+      await triggerMessages([
+        {
+          key: {
+            id: 'msg-img-only',
+            remoteJid: 'registered@g.us',
+            participant: '5551234@s.whatsapp.net',
+            fromMe: false,
+          },
+          message: {
+            imageMessage: {
+              mimetype: 'image/jpeg',
+            },
+          },
+          pushName: 'Diana',
+          messageTimestamp: Math.floor(Date.now() / 1000),
+        },
+      ]);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'registered@g.us',
+        expect.objectContaining({
+          content: '[Image: attachments/img-solo.jpg]',
+        }),
+      );
+    });
+
+    it('downloads video and delivers path marker', async () => {
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannel(channel);
+
+      await triggerMessages([
+        {
+          key: {
+            id: 'msg-vid',
+            remoteJid: 'registered@g.us',
+            participant: '5551234@s.whatsapp.net',
+            fromMe: false,
+          },
+          message: {
+            videoMessage: {
+              caption: 'clip',
+              mimetype: 'video/mp4',
+            },
+          },
+          pushName: 'Diana',
+          messageTimestamp: Math.floor(Date.now() / 1000),
+        },
+      ]);
+
+      expect(processVideo).toHaveBeenCalled();
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'registered@g.us',
+        expect.objectContaining({
+          content: '[Video: attachments/vid-test.mp4 (1KB)]',
+        }),
+      );
+    });
+
+    it('extracts caption from videoMessage when download fails', async () => {
+      vi.mocked(downloadMediaMessage).mockRejectedValueOnce(
+        new Error('download failed'),
+      );
       const opts = createTestOpts();
       const channel = new WhatsAppChannel(opts);
 

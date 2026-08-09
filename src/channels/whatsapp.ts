@@ -6,6 +6,7 @@ import {
   makeWASocket,
   Browsers,
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestWaWebVersion,
   makeCacheableSignalKeyStore,
   normalizeMessageContent,
@@ -13,6 +14,7 @@ import {
 } from '@whiskeysockets/baileys';
 import type {
   GroupMetadata,
+  WAMessage,
   WAMessageKey,
   WASocket,
   proto as ProtoTypes,
@@ -26,6 +28,7 @@ const { proto } = createRequire(import.meta.url)('@whiskeysockets/baileys') as {
 import {
   ASSISTANT_HAS_OWN_NUMBER,
   ASSISTANT_NAME,
+  GROUPS_DIR,
   STORE_DIR,
 } from '../config.js';
 import {
@@ -35,6 +38,11 @@ import {
   updateChatName,
 } from '../db.js';
 import { logger } from '../logger.js';
+import {
+  processDocument,
+  processImage,
+  processVideo,
+} from '../media.js';
 import pino from 'pino';
 
 // Baileys requires a pino-compatible logger instance
@@ -399,7 +407,21 @@ export class WhatsAppChannel implements Channel {
               normalized.extendedTextMessage?.text ||
               normalized.imageMessage?.caption ||
               normalized.videoMessage?.caption ||
+              normalized.documentMessage?.caption ||
               '';
+
+            // Download media for registered chats so the agent can see/file it.
+            // Media-only messages (no caption) must still produce non-empty content.
+            const groupDir = path.join(GROUPS_DIR, groups[chatJid].folder);
+            const mediaContent = await this.processInboundMedia(
+              msg,
+              normalized,
+              groupDir,
+              chatJid,
+            );
+            if (mediaContent) {
+              content = mediaContent;
+            }
 
             // WhatsApp group mentions use the LID in raw text (e.g. "@80355281346633")
             // instead of the display name. Normalize to @AssistantName for trigger matching.
@@ -572,6 +594,104 @@ export class WhatsAppChannel implements Channel {
       logger.info({ count }, 'Group metadata synced');
     } catch (err) {
       logger.error({ err }, 'Failed to sync group metadata');
+    }
+  }
+
+  /**
+   * Download inbound WhatsApp media into the group attachments/ folder and
+   * return agent-visible content markers ([Image: …], [Video: …], etc.).
+   * Returns null when the message has no downloadable media payload.
+   */
+  private async processInboundMedia(
+    msg: WAMessage,
+    normalized: ProtoTypes.IMessage,
+    groupDir: string,
+    chatJid: string,
+  ): Promise<string | null> {
+    const imageMsg = normalized.imageMessage;
+    const stickerMsg = normalized.stickerMessage;
+    const videoMsg = normalized.videoMessage;
+    const docMsg = normalized.documentMessage;
+
+    const isImage = !!(imageMsg || stickerMsg);
+    const isVideo = !!videoMsg;
+    const isDoc = !!docMsg;
+    if (!isImage && !isVideo && !isDoc) return null;
+
+    try {
+      const buffer = (await downloadMediaMessage(
+        msg,
+        'buffer',
+        {},
+        {
+          logger: baileysLogger,
+          reuploadRequest: this.sock.updateMediaMessage.bind(this.sock),
+        },
+      )) as Buffer;
+
+      if (isImage) {
+        const mime = imageMsg?.mimetype || stickerMsg?.mimetype;
+        const caption = imageMsg?.caption || '';
+        const result = await processImage(buffer, groupDir, caption, mime);
+        if (result) {
+          logger.info(
+            { jid: chatJid, path: result.relativePath },
+            'Processed image attachment',
+          );
+          return result.content;
+        }
+        return null;
+      }
+
+      if (isVideo) {
+        const result = processVideo(
+          buffer,
+          groupDir,
+          videoMsg?.caption || '',
+          videoMsg?.mimetype,
+        );
+        if (result) {
+          logger.info(
+            { jid: chatJid, path: result.relativePath || 'oversized' },
+            'Processed video attachment',
+          );
+          return result.content;
+        }
+        return null;
+      }
+
+      // documentMessage — image/* routed through processImage for vision
+      const mime = docMsg?.mimetype || '';
+      const caption = docMsg?.caption || '';
+      if (mime.startsWith('image/')) {
+        const result = await processImage(buffer, groupDir, caption, mime);
+        if (result) {
+          logger.info(
+            { jid: chatJid, path: result.relativePath },
+            'Processed document image attachment',
+          );
+          return result.content;
+        }
+        return null;
+      }
+
+      const result = processDocument(buffer, groupDir, {
+        caption,
+        mime,
+        fileName: docMsg?.fileName,
+      });
+      if (result) {
+        logger.info(
+          { jid: chatJid, path: result.relativePath },
+          'Processed document attachment',
+        );
+        return result.content;
+      }
+      return null;
+    } catch (err) {
+      logger.warn({ err, jid: chatJid }, 'Media download/processing failed');
+      // Keep any caption so the message is still delivered
+      return null;
     }
   }
 
