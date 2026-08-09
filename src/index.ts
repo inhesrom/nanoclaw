@@ -193,6 +193,9 @@ function loadState(): void {
   }
   sessions = getAllSessions();
   registeredGroups = getAllRegisteredGroups();
+  // Keep per-group agent_settings.json in sync with DB runtime/settings so
+  // get_agent_settings does not report a stale runtime after host restarts.
+  refreshAllAgentSettingsSnapshots();
   logger.info(
     { groupCount: Object.keys(registeredGroups).length },
     'State loaded',

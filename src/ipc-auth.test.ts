@@ -38,6 +38,7 @@ const THIRD_GROUP: RegisteredGroup = {
 let groups: Record<string, RegisteredGroup>;
 let deps: IpcDeps;
 let closeGroup: ReturnType<typeof vi.fn<(groupFolder: string) => void>>;
+let onAgentSettingsChanged: ReturnType<typeof vi.fn<() => void>>;
 
 beforeEach(() => {
   _initTestDatabase();
@@ -54,6 +55,7 @@ beforeEach(() => {
   setRegisteredGroup('third@g.us', THIRD_GROUP);
 
   closeGroup = vi.fn<(groupFolder: string) => void>();
+  onAgentSettingsChanged = vi.fn<() => void>();
   deps = {
     sendMessage: async () => {},
     registeredGroups: () => groups,
@@ -66,7 +68,7 @@ beforeEach(() => {
     getAvailableGroups: () => [],
     writeGroupsSnapshot: () => {},
     onTasksChanged: () => {},
-    onAgentSettingsChanged: () => {},
+    onAgentSettingsChanged,
     closeGroup,
   };
 });
@@ -782,5 +784,42 @@ describe('agent settings IPC', () => {
     expect(
       getRegisteredGroup('other@g.us')!.agentSettings?.claude?.reasoningEffort,
     ).toBeUndefined();
+  });
+});
+
+// --- set_runtime ---
+
+describe('set_runtime IPC', () => {
+  it('switches chat runtime and closes the active container', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_runtime',
+        runtime: 'grok',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(getRegisteredGroup('other@g.us')!.runtime).toBe('grok');
+    expect(groups['other@g.us'].runtime).toBe('grok');
+    expect(onAgentSettingsChanged).toHaveBeenCalled();
+    expect(closeGroup).toHaveBeenCalledWith('other-group');
+  });
+
+  it('rejects invalid runtime values without closing the container', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_runtime',
+        runtime: 'not-a-runtime',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(getRegisteredGroup('other@g.us')!.runtime).toBeUndefined();
+    expect(onAgentSettingsChanged).not.toHaveBeenCalled();
+    expect(closeGroup).not.toHaveBeenCalled();
   });
 });

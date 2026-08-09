@@ -801,7 +801,7 @@ interface RegisteredGroupRow {
 }
 
 function parseRuntime(v: string | null): AgentRuntime | undefined {
-  return v === 'codex' || v === 'claude' ? v : undefined;
+  return v === 'codex' || v === 'claude' || v === 'grok' ? v : undefined;
 }
 
 function parseAgentSettings(v: string | null): AgentSettings | undefined {

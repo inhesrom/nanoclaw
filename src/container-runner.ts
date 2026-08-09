@@ -325,10 +325,11 @@ function buildVolumeMounts(
     });
   }
 
-  // Codex runtime: give the container a per-group CODEX_HOME seeded with the host's
-  // ChatGPT/Codex login. OneCLI injects no LLM credential for Codex, so Codex
-  // authenticates with this auth.json directly (mirrors the Claude .credentials.json
-  // mount). Copied fresh each spawn; rw so token refreshes and session files persist.
+  // Codex / Grok runtimes: give the container a per-group home seeded with the
+  // host's subscription login (auth.json). OneCLI injects no LLM credential for
+  // these CLIs, so they authenticate with the seeded auth file directly (mirrors
+  // the Claude .credentials.json mount). Copied fresh each spawn; rw so token
+  // refreshes and session files persist.
   const runtime = group.runtime ?? DEFAULT_RUNTIME;
   if (runtime === 'codex') {
     const codexHome = path.join(DATA_DIR, 'sessions', group.folder, '.codex');
@@ -340,6 +341,19 @@ function buildVolumeMounts(
     mounts.push({
       hostPath: codexHome,
       containerPath: '/home/node/.codex',
+      readonly: false,
+    });
+  }
+  if (runtime === 'grok') {
+    const grokHome = path.join(DATA_DIR, 'sessions', group.folder, '.grok');
+    fs.mkdirSync(grokHome, { recursive: true });
+    const hostGrokAuth = path.join(os.homedir(), '.grok', 'auth.json');
+    if (fs.existsSync(hostGrokAuth)) {
+      fs.copyFileSync(hostGrokAuth, path.join(grokHome, 'auth.json'));
+    }
+    mounts.push({
+      hostPath: grokHome,
+      containerPath: '/home/node/.grok',
       readonly: false,
     });
   }
@@ -414,13 +428,17 @@ async function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Select the container agent runtime: 'claude' (Claude Agent SDK) or 'codex'
-  // (OpenAI Codex CLI). The agent-runner branches on this at startup.
+  // Select the container agent runtime: 'claude', 'codex', or 'grok'.
+  // The agent-runner branches on this at startup.
   args.push('-e', `NANOCLAW_RUNTIME=${runtime}`);
   if (runtime === 'codex') {
     // Codex reads auth.json / config.toml / sessions from CODEX_HOME, which is the
     // per-group .codex dir mounted below.
     args.push('-e', 'CODEX_HOME=/home/node/.codex');
+  }
+  if (runtime === 'grok') {
+    // Grok Build reads auth.json / config.toml / sessions from GROK_HOME.
+    args.push('-e', 'GROK_HOME=/home/node/.grok');
   }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.

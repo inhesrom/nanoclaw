@@ -4,6 +4,7 @@ import {
   allowedMcpToolPatterns,
   buildClaudeMcpServers,
   buildCodexMcpConfigToml,
+  buildGrokMcpConfigToml,
   MCP_SERVERS,
 } from './mcp-servers.js';
 
@@ -17,7 +18,7 @@ test('gdocs is registered with placeholder auth and the proxy preload', () => {
   assert.ok(allowedMcpToolPatterns().includes('mcp__gdocs__*'));
 });
 
-test('Claude and Codex gdocs configs include proxy variables and preload', () => {
+test('Claude, Codex, and Grok gdocs configs include proxy variables and preload', () => {
   const originalHttpsProxy = process.env.HTTPS_PROXY;
   const originalCa = process.env.NODE_EXTRA_CA_CERTS;
   const originalNodeOptions = process.env.NODE_OPTIONS;
@@ -34,15 +35,23 @@ test('Claude and Codex gdocs configs include proxy variables and preload', () =>
       '--trace-warnings --import=file:///app/proxy-preload.mjs',
     );
 
-    const codex = buildCodexMcpConfigToml();
-    assert.match(codex, /\[mcp_servers\.gdocs\]/);
-    assert.match(codex, /GOOGLE_API_ACCESS_TOKEN = "placeholder"/);
-    assert.match(codex, /HTTPS_PROXY = "http:\/\/gateway\.invalid:10255"/);
-    assert.match(codex, /NODE_EXTRA_CA_CERTS = "\/tmp\/onecli-ca\.pem"/);
-    assert.match(
-      codex,
-      /NODE_OPTIONS = "--import=file:\/\/\/app\/proxy-preload\.mjs"/,
-    );
+    for (const build of [buildCodexMcpConfigToml, buildGrokMcpConfigToml]) {
+      const tomlConfig = build();
+      assert.match(tomlConfig, /\[mcp_servers\.gdocs\]/);
+      assert.match(tomlConfig, /GOOGLE_API_ACCESS_TOKEN = "placeholder"/);
+      assert.match(
+        tomlConfig,
+        /HTTPS_PROXY = "http:\/\/gateway\.invalid:10255"/,
+      );
+      assert.match(
+        tomlConfig,
+        /NODE_EXTRA_CA_CERTS = "\/tmp\/onecli-ca\.pem"/,
+      );
+      assert.match(
+        tomlConfig,
+        /NODE_OPTIONS = "--import=file:\/\/\/app\/proxy-preload\.mjs"/,
+      );
+    }
   } finally {
     if (originalHttpsProxy === undefined) delete process.env.HTTPS_PROXY;
     else process.env.HTTPS_PROXY = originalHttpsProxy;

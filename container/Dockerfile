@@ -35,8 +35,22 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # avoids a ~16s cold
 # download per ephemeral spawn that races past the Agent SDK's MCP-connection window.
 # Codex's --json schema and auth.json were verified against codex-cli 0.142.5 (pin
-# @openai/codex if a future release drifts). Either runtime runs (NANOCLAW_RUNTIME).
+# @openai/codex if a future release drifts). Grok Build CLI is installed next
+# (headless -p / --output-format json verified against 1.0.0). Any of the three
+# runtimes run via NANOCLAW_RUNTIME=claude|codex|grok.
 RUN npm install -g agent-browser @anthropic-ai/claude-code @cocal/google-calendar-mcp @gongrzhe/server-gmail-autoauth-mcp google-sheets-mcp @openai/codex
+
+# Grok Build CLI (xAI). Official installer: https://x.ai/cli/install.sh
+# Installer places a versioned binary under $HOME/.grok/downloads and links
+# GROK_BIN_DIR/grok to it. Copy to a real file under /usr/local/bin so the
+# binary stays available when we mount a per-group GROK_HOME over ~/.grok.
+ENV GROK_BIN_DIR=/usr/local/bin
+RUN curl -fsSL https://x.ai/cli/install.sh | bash \
+    && GROK_REAL="$(readlink -f /usr/local/bin/grok)" \
+    && cp -f "$GROK_REAL" /usr/local/bin/grok.bin \
+    && mv -f /usr/local/bin/grok.bin /usr/local/bin/grok \
+    && chmod 755 /usr/local/bin/grok \
+    && /usr/local/bin/grok version
 
 # GitHub official MCP server (Go binary; token-based auth — the onecli-managed
 # placeholder PAT is swapped by the credential gateway at api.github.com).
