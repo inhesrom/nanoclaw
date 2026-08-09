@@ -196,7 +196,9 @@ export function processDocument(
   const dir = attachDir(groupDir);
   const rawName = opts.fileName || `doc-${uniqueId()}${extFromMime(mime, '')}`;
   // Prevent path traversal from WA-supplied names
-  const safeName = path.basename(rawName).replace(/[^\w.\- ()[\]]+/g, '_') || `doc-${uniqueId()}`;
+  const safeName =
+    path.basename(rawName).replace(/[^\w.\- ()[\]]+/g, '_') ||
+    `doc-${uniqueId()}`;
   const filePath = path.join(dir, safeName);
   // Avoid clobbering: if exists, prefix with id
   const finalName = fs.existsSync(filePath)

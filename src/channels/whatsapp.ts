@@ -38,11 +38,7 @@ import {
   updateChatName,
 } from '../db.js';
 import { logger } from '../logger.js';
-import {
-  processDocument,
-  processImage,
-  processVideo,
-} from '../media.js';
+import { processDocument, processImage, processVideo } from '../media.js';
 import pino from 'pino';
 
 // Baileys requires a pino-compatible logger instance
