@@ -64,9 +64,21 @@ interface SessionsIndex {
   entries: SessionEntry[];
 }
 
+type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+
+interface ImageContentBlock {
+  type: 'image';
+  source: { type: 'base64'; media_type: ImageMediaType; data: string };
+}
+interface TextContentBlock {
+  type: 'text';
+  text: string;
+}
+type ContentBlock = ImageContentBlock | TextContentBlock;
+
 interface SDKUserMessage {
   type: 'user';
-  message: { role: 'user'; content: string };
+  message: { role: 'user'; content: string | ContentBlock[] };
   parent_tool_use_id: null;
   session_id: string;
 }
@@ -74,8 +86,70 @@ interface SDKUserMessage {
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
+const GROUP_WORKDIR = '/workspace/group';
+/** Matches `[Image: attachments/…]` markers written by the host media pipeline. */
+const IMAGE_REF_PATTERN = /\[Image: (attachments\/[^\]]+)\]/g;
 const CLAUDE_REASONING_EFFORTS = ['low', 'medium', 'high', 'max'] as const;
 type ClaudeReasoningEffort = (typeof CLAUDE_REASONING_EFFORTS)[number];
+
+function mediaTypeFromPath(relativePath: string): ImageMediaType {
+  const ext = path.extname(relativePath).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'image/jpeg';
+}
+
+/** Prefer `.vision.jpg` sidecar (resized) when present; else the marker path. */
+function resolveVisionAbsolutePath(relativePath: string): string {
+  const dir = path.dirname(relativePath);
+  const base = path.basename(relativePath, path.extname(relativePath));
+  const visionRel = path.join(dir, `${base}.vision.jpg`);
+  const visionAbs = path.join(GROUP_WORKDIR, visionRel);
+  if (fs.existsSync(visionAbs)) return visionAbs;
+  return path.join(GROUP_WORKDIR, relativePath);
+}
+
+export function parseImagePathsFromText(text: string): string[] {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  IMAGE_REF_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = IMAGE_REF_PATTERN.exec(text)) !== null) {
+    if (seen.has(match[1])) continue;
+    seen.add(match[1]);
+    paths.push(match[1]);
+  }
+  return paths;
+}
+
+/**
+ * Build Claude multimodal content when the prompt contains image markers.
+ * Falls back to plain text when no images load successfully.
+ */
+function buildUserContent(prompt: string): string | ContentBlock[] {
+  const imagePaths = parseImagePathsFromText(prompt);
+  if (imagePaths.length === 0) return prompt;
+
+  const blocks: ContentBlock[] = [{ type: 'text', text: prompt }];
+  for (const rel of imagePaths) {
+    const abs = resolveVisionAbsolutePath(rel);
+    try {
+      const data = fs.readFileSync(abs).toString('base64');
+      const mediaType = abs.endsWith('.vision.jpg')
+        ? 'image/jpeg'
+        : mediaTypeFromPath(rel);
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: mediaType, data },
+      });
+      log(`Loaded image for vision: ${abs}`);
+    } catch {
+      log(`Failed to load image for vision: ${abs}`);
+    }
+  }
+  return blocks.length > 1 ? blocks : prompt;
+}
 
 /**
  * Push-based async iterable for streaming user messages to the SDK.
@@ -89,7 +163,7 @@ class MessageStream {
   push(text: string): void {
     this.queue.push({
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content: buildUserContent(text) },
       parent_tool_use_id: null,
       session_id: '',
     });
