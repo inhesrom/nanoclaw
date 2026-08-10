@@ -165,17 +165,19 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
 ); // 10MB default
 export const ONECLI_URL = process.env.ONECLI_URL || envConfig.ONECLI_URL;
 
-// Default agent runtime for containers: 'claude' (Claude Agent SDK) or 'codex'
-// (OpenAI Codex CLI). Per-group overrides live in registered_groups.runtime and are
-// set at runtime via the set_runtime tool ("use codex/claude from now on").
-export const DEFAULT_RUNTIME: AgentRuntime =
-  (
-    process.env.NANOCLAW_RUNTIME ||
-    envConfig.NANOCLAW_RUNTIME ||
-    ''
-  ).toLowerCase() === 'claude'
-    ? 'claude'
-    : 'codex';
+// Default agent runtime for containers: 'claude' (Claude Agent SDK), 'codex'
+// (OpenAI Codex CLI), or 'grok' (Grok Build CLI). Per-group overrides live in
+// registered_groups.runtime and are set via the set_runtime tool
+// ("use codex/claude/grok from now on").
+function parseDefaultRuntime(value: string | undefined): AgentRuntime {
+  const normalized = (value || '').toLowerCase();
+  if (normalized === 'claude') return 'claude';
+  if (normalized === 'grok') return 'grok';
+  return 'codex';
+}
+export const DEFAULT_RUNTIME: AgentRuntime = parseDefaultRuntime(
+  process.env.NANOCLAW_RUNTIME || envConfig.NANOCLAW_RUNTIME,
+);
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,

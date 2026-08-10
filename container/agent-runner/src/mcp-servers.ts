@@ -1,11 +1,12 @@
 /**
- * Shared MCP server definitions for both agent runtimes.
+ * Shared MCP server definitions for all agent runtimes.
  *
  * Each external tool server (calendar, Docs, github, gmail, sheets) is described once here
  * and consumed by:
  *   - the Claude path (index.ts): buildClaudeMcpServers() -> query() `mcpServers`,
  *     plus allowedMcpToolPatterns() -> `allowedTools`
  *   - the Codex path (codex-runtime.ts): buildCodexMcpConfigToml() -> config.toml
+ *   - the Grok path (grok-runtime.ts): buildGrokMcpConfigToml() -> config.toml
  *
  * Credential model (OneCLI gateway): servers carry `onecli-managed` placeholder
  * credentials; the gateway MITMs their HTTPS calls at each provider's API host and
@@ -183,10 +184,11 @@ export function toml(value: string): string {
 }
 
 /**
- * Codex runtime: [mcp_servers.*] TOML blocks. Codex does not forward the parent
- * env to MCP subprocesses, so proxy/CA vars are enumerated explicitly per server.
+ * Build [mcp_servers.*] TOML blocks for CLI runtimes (Codex, Grok).
+ * Those CLIs do not forward the parent env to MCP subprocesses, so proxy/CA
+ * vars are enumerated explicitly per server.
  */
-export function buildCodexMcpConfigToml(): string {
+function buildCliMcpConfigToml(): string {
   let config = '';
   for (const def of activeMcpServers()) {
     const env: Record<string, string> = { ...def.env };
@@ -208,4 +210,14 @@ export function buildCodexMcpConfigToml(): string {
     }
   }
   return config;
+}
+
+/** Codex runtime: [mcp_servers.*] TOML blocks. */
+export function buildCodexMcpConfigToml(): string {
+  return buildCliMcpConfigToml();
+}
+
+/** Grok runtime: [mcp_servers.*] TOML blocks (same shape as Codex). */
+export function buildGrokMcpConfigToml(): string {
+  return buildCliMcpConfigToml();
 }

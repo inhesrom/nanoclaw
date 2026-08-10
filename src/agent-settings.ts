@@ -10,7 +10,7 @@ import {
 
 export const AGENT_DEFAULTS_STATE_KEY = 'agent_defaults';
 
-export const AGENT_PROVIDERS: AgentProvider[] = ['claude', 'codex'];
+export const AGENT_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'grok'];
 
 export const CLAUDE_REASONING_EFFORTS = ['low', 'medium', 'high', 'max'];
 export const CODEX_REASONING_EFFORTS = [
@@ -19,6 +19,15 @@ export const CODEX_REASONING_EFFORTS = [
   'medium',
   'high',
   'xhigh',
+];
+export const GROK_REASONING_EFFORTS = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
 ];
 
 export const CLAUDE_MODEL_OPTIONS = [
@@ -39,6 +48,8 @@ export const CODEX_MODEL_OPTIONS = [
   'gpt-5',
 ];
 
+export const GROK_MODEL_OPTIONS = ['grok-4.5', 'grok-build'];
+
 const MODEL_SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,119}$/;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -51,7 +62,10 @@ function nonEmptyString(value: unknown): string | undefined {
 
 export function normalizeProvider(value: unknown): AgentProvider | undefined {
   const provider = nonEmptyString(value)?.toLowerCase();
-  return provider === 'claude' || provider === 'codex' ? provider : undefined;
+  if (provider === 'claude' || provider === 'codex' || provider === 'grok') {
+    return provider;
+  }
+  return undefined;
 }
 
 export function validateModelSlug(model: string): boolean {
@@ -59,15 +73,15 @@ export function validateModelSlug(model: string): boolean {
 }
 
 export function reasoningEffortOptions(provider: AgentProvider): string[] {
-  return provider === 'claude'
-    ? [...CLAUDE_REASONING_EFFORTS]
-    : [...CODEX_REASONING_EFFORTS];
+  if (provider === 'claude') return [...CLAUDE_REASONING_EFFORTS];
+  if (provider === 'grok') return [...GROK_REASONING_EFFORTS];
+  return [...CODEX_REASONING_EFFORTS];
 }
 
 export function modelOptions(provider: AgentProvider): string[] {
-  return provider === 'claude'
-    ? [...CLAUDE_MODEL_OPTIONS]
-    : [...CODEX_MODEL_OPTIONS];
+  if (provider === 'claude') return [...CLAUDE_MODEL_OPTIONS];
+  if (provider === 'grok') return [...GROK_MODEL_OPTIONS];
+  return [...CODEX_MODEL_OPTIONS];
 }
 
 export function validateReasoningEffort(

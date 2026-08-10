@@ -32,8 +32,8 @@ export interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }
 
-// Which agent runtime the container runs: the Claude Agent SDK or the OpenAI Codex CLI.
-export type AgentRuntime = 'claude' | 'codex';
+// Which agent runtime the container runs: Claude Agent SDK, OpenAI Codex CLI, or Grok Build CLI.
+export type AgentRuntime = 'claude' | 'codex' | 'grok';
 export type AgentProvider = AgentRuntime;
 
 export type AgentSettingSource = 'chat' | 'default' | 'provider';

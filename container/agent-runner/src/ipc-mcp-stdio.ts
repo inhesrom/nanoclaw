@@ -19,8 +19,17 @@ const AGENT_SETTINGS_FILE = path.join(IPC_DIR, 'agent_settings.json');
 const MODEL_SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,119}$/;
 const CLAUDE_REASONING_EFFORTS = ['low', 'medium', 'high', 'max'];
 const CODEX_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+const GROK_REASONING_EFFORTS = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
 
-type Provider = 'claude' | 'codex';
+type Provider = 'claude' | 'codex' | 'grok';
 type ProviderArg = Provider | 'current';
 
 interface SettingSnapshot {
@@ -74,9 +83,28 @@ function readAgentSettingsSnapshot(): AgentSettingsSnapshot | null {
   }
 }
 
+function writeAgentSettingsSnapshot(snapshot: AgentSettingsSnapshot): void {
+  const tempPath = `${AGENT_SETTINGS_FILE}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(snapshot, null, 2));
+  fs.renameSync(tempPath, AGENT_SETTINGS_FILE);
+}
+
+/** Runtime of *this* container process (env baked at spawn). */
+function activeProcessRuntime(): Provider | null {
+  const runtime = (process.env.NANOCLAW_RUNTIME || '').toLowerCase();
+  if (runtime === 'claude' || runtime === 'codex' || runtime === 'grok') {
+    return runtime;
+  }
+  return null;
+}
+
 function resolvedProvider(provider: ProviderArg): Provider | null {
   if (provider !== 'current') return provider;
-  return readAgentSettingsSnapshot()?.currentRuntime ?? null;
+  // Prefer configured next-message runtime from the snapshot; fall back to this
+  // container's env so model/reasoning tools still work mid-switch.
+  return (
+    readAgentSettingsSnapshot()?.currentRuntime ?? activeProcessRuntime()
+  );
 }
 
 function formatSetting(setting: SettingSnapshot): string {
@@ -87,13 +115,25 @@ function formatSetting(setting: SettingSnapshot): string {
 }
 
 function formatAgentSettings(snapshot: AgentSettingsSnapshot): string {
+  const processRuntime = activeProcessRuntime();
   const lines = [
-    `Current runtime: ${snapshot.currentRuntime}`,
+    `Configured runtime (next message): ${snapshot.currentRuntime}`,
+  ];
+  if (processRuntime) {
+    const pending =
+      processRuntime !== snapshot.currentRuntime
+        ? ` — switch to ${snapshot.currentRuntime} takes effect on the next message`
+        : '';
+    lines.push(`Active in this container: ${processRuntime}${pending}`);
+  } else {
+    lines.push('Active in this container: unknown');
+  }
+  lines.push(
     `Can change global defaults: ${snapshot.canSetDefaults ? 'yes' : 'no'}`,
     '',
-  ];
+  );
 
-  for (const provider of ['claude', 'codex'] as Provider[]) {
+  for (const provider of ['claude', 'codex', 'grok'] as Provider[]) {
     const settings = snapshot.providers[provider];
     lines.push(`${provider}:`);
     lines.push(`- model: ${formatSetting(settings.model)}`);
@@ -112,10 +152,14 @@ function formatAgentSettings(snapshot: AgentSettingsSnapshot): string {
   return lines.join('\n').trim();
 }
 
+function reasoningEffortsFor(provider: Provider): string[] {
+  if (provider === 'claude') return CLAUDE_REASONING_EFFORTS;
+  if (provider === 'grok') return GROK_REASONING_EFFORTS;
+  return CODEX_REASONING_EFFORTS;
+}
+
 function validReasoningEffort(provider: Provider, effort: string): boolean {
-  return (
-    provider === 'claude' ? CLAUDE_REASONING_EFFORTS : CODEX_REASONING_EFFORTS
-  ).includes(effort);
+  return reasoningEffortsFor(provider).includes(effort);
 }
 
 const server = new McpServer({
@@ -589,10 +633,10 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
 server.tool(
   'set_runtime',
-  `Switch which agent runtime this chat uses going forward: "claude" (Claude Agent SDK) or "codex" (OpenAI Codex CLI, backed by the ChatGPT/Codex subscription). Call this when the user says things like "use codex from now on", "switch to claude", or "run on codex". Takes effect on the next message (each message spawns a fresh container).`,
+  `Switch which agent runtime this chat uses going forward: "claude" (Claude Agent SDK), "codex" (OpenAI Codex CLI, backed by the ChatGPT/Codex subscription), or "grok" (Grok Build CLI, backed by SuperGrok / xAI). Call this when the user says things like "use codex from now on", "switch to claude", "use grok", or "run on grok". Takes effect on the next message (host closes this container and the next message spawns a fresh one). Do not treat "Active in this container" still showing the old runtime as a failed switch — that is expected until the next message.`,
   {
     runtime: z
-      .enum(['claude', 'codex'])
+      .enum(['claude', 'codex', 'grok'])
       .describe('The runtime to use for this chat going forward'),
   },
   async (args) => {
@@ -605,11 +649,29 @@ server.tool(
 
     writeIpcFile(TASKS_DIR, data);
 
+    // Optimistically update the snapshot so same-turn get_agent_settings does
+    // not report a false failure while the host IPC poll (~1s) is in flight.
+    try {
+      const snapshot = readAgentSettingsSnapshot();
+      if (snapshot) {
+        snapshot.currentRuntime = args.runtime;
+        writeAgentSettingsSnapshot(snapshot);
+      }
+    } catch {
+      // Host will rewrite the snapshot when it processes set_runtime.
+    }
+
+    const processRuntime = activeProcessRuntime();
+    const stillThisProcess =
+      processRuntime && processRuntime !== args.runtime
+        ? ` This container is still running ${processRuntime}; the next message will use ${args.runtime}.`
+        : ' It takes effect on your next message.';
+
     return {
       content: [
         {
           type: 'text' as const,
-          text: `Runtime for this chat set to "${args.runtime}". It takes effect on your next message.`,
+          text: `Runtime for this chat set to "${args.runtime}".${stillThisProcess}`,
         },
       ],
     };
@@ -618,7 +680,7 @@ server.tool(
 
 server.tool(
   'get_agent_settings',
-  `List the current runtime, model, reasoning/thinking effort, global defaults, per-chat overrides, and valid options for Claude and Codex. Call this when the user asks what model/reasoning mode is active or asks to see model/thinking options.`,
+  `List the configured runtime (next message), the runtime active in this container, model, reasoning/thinking effort, global defaults, per-chat overrides, and valid options for Claude, Codex, and Grok. If configured and active differ, a switch is pending and is not a failure.`,
   {},
   async () => {
     const snapshot = readAgentSettingsSnapshot();
@@ -637,7 +699,7 @@ server.tool(
 
 server.tool(
   'set_agent_model',
-  `Change the model used by this chat or, from the main chat only, the global default for a provider. Use scope "chat" for the current chat override and scope "default" for the provider default used by chats without an override. Use provider "current" unless the user specifically names Claude or Codex. Use model "auto" to clear the override/default and return to the next fallback.`,
+  `Change the model used by this chat or, from the main chat only, the global default for a provider. Use scope "chat" for the current chat override and scope "default" for the provider default used by chats without an override. Use provider "current" unless the user specifically names Claude, Codex, or Grok. Use model "auto" to clear the override/default and return to the next fallback.`,
   {
     scope: z
       .enum(['chat', 'default'])
@@ -645,12 +707,12 @@ server.tool(
         'Whether to change this chat override or a global provider default',
       ),
     provider: z
-      .enum(['current', 'claude', 'codex'])
+      .enum(['current', 'claude', 'codex', 'grok'])
       .describe('Provider to change; use current unless user names a provider'),
     model: z
       .string()
       .describe(
-        'Model slug to use, such as claude-sonnet-4-6 or gpt-5-codex. Use "auto" to clear.',
+        'Model slug to use, such as claude-sonnet-4-6, gpt-5-codex, or grok-4.5. Use "auto" to clear.',
       ),
   },
   async (args) => {
@@ -704,7 +766,7 @@ server.tool(
 
 server.tool(
   'set_reasoning_effort',
-  `Change reasoning/thinking effort for this chat or, from the main chat only, the global default for a provider. Claude options: low, medium, high, max. Codex options: minimal, low, medium, high, xhigh. Use provider "current" unless the user specifically names Claude or Codex. Use effort "auto" to clear the override/default and return to the next fallback.`,
+  `Change reasoning/thinking effort for this chat or, from the main chat only, the global default for a provider. Claude options: low, medium, high, max. Codex options: minimal, low, medium, high, xhigh. Grok options: none, minimal, low, medium, high, xhigh, max. Use provider "current" unless the user specifically names Claude, Codex, or Grok. Use effort "auto" to clear the override/default and return to the next fallback.`,
   {
     scope: z
       .enum(['chat', 'default'])
@@ -712,7 +774,7 @@ server.tool(
         'Whether to change this chat override or a global provider default',
       ),
     provider: z
-      .enum(['current', 'claude', 'codex'])
+      .enum(['current', 'claude', 'codex', 'grok'])
       .describe('Provider to change; use current unless user names a provider'),
     effort: z.string().describe('Reasoning effort value, or "auto" to clear'),
   },
@@ -737,7 +799,7 @@ server.tool(
         content: [
           {
             type: 'text' as const,
-            text: 'Current provider is not available yet. Use provider "claude" or "codex", or try again on the next message.',
+            text: 'Current provider is not available yet. Use provider "claude", "codex", or "grok", or try again on the next message.',
           },
         ],
         isError: true,
@@ -745,10 +807,7 @@ server.tool(
     }
 
     if (effort !== 'auto' && !validReasoningEffort(provider, effort)) {
-      const options =
-        provider === 'claude'
-          ? CLAUDE_REASONING_EFFORTS
-          : CODEX_REASONING_EFFORTS;
+      const options = reasoningEffortsFor(provider);
       return {
         content: [
           {

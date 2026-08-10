@@ -517,14 +517,18 @@ export async function processTaskIpc(
     case 'set_runtime': {
       // Switch the runtime for the SOURCE group only (verified identity), ignoring
       // any chatJid the agent supplied. Self-scoped, so no main-only restriction.
+      // Close the active container so the next message spawns with the new
+      // NANOCLAW_RUNTIME (idle containers keep the old env for IDLE_TIMEOUT).
       const runtime = data.runtime;
-      if (runtime === 'claude' || runtime === 'codex') {
+      if (runtime === 'claude' || runtime === 'codex' || runtime === 'grok') {
         const entry = Object.entries(registeredGroups).find(
           ([, g]) => g.folder === sourceGroup,
         );
         if (entry) {
           const [jid, group] = entry;
           deps.registerGroup(jid, { ...group, runtime });
+          deps.onAgentSettingsChanged?.();
+          deps.closeGroup?.(sourceGroup);
           logger.info({ sourceGroup, runtime }, 'Runtime updated for group');
         } else {
           logger.warn(

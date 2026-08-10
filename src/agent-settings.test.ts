@@ -51,4 +51,19 @@ describe('agent settings resolution', () => {
   it('lists GPT-5.6 Terra as a Codex model option', () => {
     expect(modelOptions('codex')).toContain('gpt-5.6-terra');
   });
+
+  it('lists grok-4.5 as a Grok model option and accepts grok provider', () => {
+    expect(modelOptions('grok')).toContain('grok-4.5');
+    const snapshot = buildAgentSettingsSnapshot(
+      { grok: { model: 'grok-4.5', reasoningEffort: 'high' } },
+      {},
+      'grok',
+      true,
+    );
+    expect(snapshot.currentRuntime).toBe('grok');
+    expect(snapshot.providers.grok.model).toMatchObject({
+      effective: 'grok-4.5',
+      source: 'chat',
+    });
+  });
 });
