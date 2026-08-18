@@ -48,8 +48,39 @@ describe('agent settings resolution', () => {
     });
   });
 
-  it('lists GPT-5.6 Terra as a Codex model option', () => {
-    expect(modelOptions('codex')).toContain('gpt-5.6-terra');
+  it('lists GPT-5.6 Sol, Terra, and Luna as Codex model options', () => {
+    expect(modelOptions('codex')).toEqual(
+      expect.arrayContaining(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']),
+    );
+  });
+
+  it('persists Codex tier nicknames as canonical GPT-5.6 slugs', () => {
+    expect(updateProviderAgentSettings({}, 'codex', { model: 'sol' })).toEqual({
+      codex: { model: 'gpt-5.6-sol' },
+    });
+    expect(
+      updateProviderAgentSettings({}, 'codex', { model: 'Terra' }),
+    ).toEqual({
+      codex: { model: 'gpt-5.6-terra' },
+    });
+    expect(updateProviderAgentSettings({}, 'codex', { model: 'LUNA' })).toEqual(
+      {
+        codex: { model: 'gpt-5.6-luna' },
+      },
+    );
+  });
+
+  it('resolves a leftover sol chat override to gpt-5.6-sol', () => {
+    expect(
+      resolveRuntimeAgentSettings(
+        'codex',
+        { codex: { model: 'sol', reasoningEffort: 'xhigh' } },
+        { codex: { model: 'gpt-5.6-luna' } },
+      ),
+    ).toEqual({
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'xhigh',
+    });
   });
 
   it('lists grok-4.5 as a Grok model option and accepts grok provider', () => {

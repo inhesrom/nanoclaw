@@ -707,6 +707,24 @@ describe('agent settings IPC', () => {
     expect(closeGroup).toHaveBeenCalledWith('other-group');
   });
 
+  it('stores Codex tier nicknames as canonical slugs', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_agent_model',
+        provider: 'codex',
+        scope: 'chat',
+        model: 'sol',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(getRegisteredGroup('other@g.us')!.agentSettings?.codex?.model).toBe(
+      'gpt-5.6-sol',
+    );
+  });
+
   it('non-main group cannot set global model defaults', async () => {
     await processTaskIpc(
       {

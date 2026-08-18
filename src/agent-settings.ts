@@ -40,13 +40,21 @@ export const CLAUDE_MODEL_OPTIONS = [
 ];
 
 export const CODEX_MODEL_OPTIONS = [
+  'gpt-5.6-sol',
   'gpt-5.6-terra',
+  'gpt-5.6-luna',
   'gpt-5-codex',
   'gpt-5.5',
   'gpt-5.4',
   'gpt-5.4-mini',
   'gpt-5',
 ];
+
+const CODEX_TIER_ALIASES: Record<string, string> = {
+  sol: 'gpt-5.6-sol',
+  terra: 'gpt-5.6-terra',
+  luna: 'gpt-5.6-luna',
+};
 
 export const GROK_MODEL_OPTIONS = ['grok-4.5', 'grok-build'];
 
@@ -70,6 +78,14 @@ export function normalizeProvider(value: unknown): AgentProvider | undefined {
 
 export function validateModelSlug(model: string): boolean {
   return MODEL_SLUG_PATTERN.test(model);
+}
+
+export function canonicalizeModelSlug(
+  provider: AgentProvider,
+  model: string,
+): string {
+  if (provider !== 'codex') return model;
+  return CODEX_TIER_ALIASES[model.trim().toLowerCase()] ?? model;
 }
 
 export function reasoningEffortOptions(provider: AgentProvider): string[] {
@@ -99,7 +115,9 @@ function normalizeProviderSettings(
 
   const settings: ProviderAgentSettings = {};
   const model = nonEmptyString(value.model);
-  if (model && validateModelSlug(model)) settings.model = model;
+  if (model && validateModelSlug(model)) {
+    settings.model = canonicalizeModelSlug(provider, model);
+  }
 
   const reasoningEffort = nonEmptyString(
     value.reasoningEffort ?? value.reasoning_effort,
@@ -144,7 +162,7 @@ export function updateProviderAgentSettings(
 
   if ('model' in patch) {
     if (patch.model) {
-      providerSettings.model = patch.model;
+      providerSettings.model = canonicalizeModelSlug(provider, patch.model);
     } else {
       delete providerSettings.model;
     }

@@ -67,7 +67,7 @@ import {
   buildAgentSettingsSnapshot,
   resolveRuntimeAgentSettings,
 } from './agent-settings.js';
-import { GroupQueue } from './group-queue.js';
+import { formatAgentFailureNotice, GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
@@ -405,7 +405,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let outputSentToUser = false;
   let correlatedTerminalFailure = false;
 
+  let lastAgentError: string | undefined;
   const output = await runAgent(group, prompt, chatJid, async (result) => {
+    if (result.status === 'error' && result.error) {
+      lastAgentError = result.error;
+    }
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw =
@@ -453,7 +457,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
-  if (output === 'error' || hadError) {
+  if (output.status === 'error' || hadError) {
+    queue.recordLastError(
+      chatJid,
+      (output.status === 'error' ? output.error : undefined) ||
+        lastAgentError ||
+        'The agent failed',
+    );
     if (correlatedTerminalFailure) return true;
     // If we already sent output to the user, don't roll back the cursor —
     // the user got their response and re-processing would send duplicates.
@@ -476,6 +486,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const [unansweredEvenTurn] = getEvenTurnsForChat(chatJid, ['running']);
   if (unansweredEvenTurn) {
+    queue.recordLastError(chatJid, 'Agent completed without a reply');
     logger.warn(
       { turn_id: unansweredEvenTurn.id, state: 'running' },
       'Agent completed without a correlated reply',
@@ -493,7 +504,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
-): Promise<'success' | 'error'> {
+): Promise<{ status: 'success' } | { status: 'error'; error?: string }> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
   const runtime = group.runtime ?? DEFAULT_RUNTIME;
@@ -597,13 +608,16 @@ async function runAgent(
         { group: group.name, error: output.error },
         'Container agent error',
       );
-      return 'error';
+      return { status: 'error', error: output.error };
     }
 
-    return 'success';
+    return { status: 'success' };
   } catch (err) {
     logger.error({ group: group.name, err }, 'Agent error');
-    return 'error';
+    return {
+      status: 'error',
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -1008,11 +1022,11 @@ async function main(): Promise<void> {
   });
   startSessionCleanup();
   queue.setProcessMessagesFn(processGroupMessages);
-  queue.setRetriesExhaustedFn((chatJid) => {
+  queue.setRetriesExhaustedFn((chatJid, error) => {
     for (const turn of getEvenTurnsForChat(chatJid, ['running'])) {
       transitionEvenTurnState(turn.id, 'running', 'failed', {
         errorCode: 'agent_failed',
-        errorMessage: 'The agent could not complete this turn.',
+        errorMessage: error || 'The agent could not complete this turn.',
         completedAt: new Date().toISOString(),
       });
       logger.warn(
@@ -1021,6 +1035,17 @@ async function main(): Promise<void> {
       );
     }
     evenHubWhatsAppBridge?.requestDispatch();
+    const channel = findChannel(channels, chatJid);
+    if (channel) {
+      channel
+        .sendMessage(chatJid, formatAgentFailureNotice(error))
+        .catch((err) =>
+          logger.error(
+            { chatJid, err },
+            'Failed to send retry-exhausted notice',
+          ),
+        );
+    }
   });
   evenHubWhatsAppBridge?.start();
   recoverPendingMessages();

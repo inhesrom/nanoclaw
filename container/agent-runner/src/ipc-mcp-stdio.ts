@@ -17,6 +17,19 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const AGENT_SETTINGS_FILE = path.join(IPC_DIR, 'agent_settings.json');
 
 const MODEL_SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,119}$/;
+const CODEX_TIER_ALIASES: Record<string, string> = {
+  sol: 'gpt-5.6-sol',
+  terra: 'gpt-5.6-terra',
+  luna: 'gpt-5.6-luna',
+};
+
+function canonicalizeModelSlug(
+  provider: Provider | string | undefined,
+  model: string,
+): string {
+  if (provider !== 'codex') return model;
+  return CODEX_TIER_ALIASES[model.trim().toLowerCase()] ?? model;
+}
 const CLAUDE_REASONING_EFFORTS = ['low', 'medium', 'high', 'max'];
 const CODEX_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 const GROK_REASONING_EFFORTS = [
@@ -699,7 +712,7 @@ server.tool(
 
 server.tool(
   'set_agent_model',
-  `Change the model used by this chat or, from the main chat only, the global default for a provider. Use scope "chat" for the current chat override and scope "default" for the provider default used by chats without an override. Use provider "current" unless the user specifically names Claude, Codex, or Grok. Use model "auto" to clear the override/default and return to the next fallback.`,
+  `Change the model used by this chat or, from the main chat only, the global default for a provider. Use scope "chat" for the current chat override and scope "default" for the provider default used by chats without an override. Use provider "current" unless the user specifically names Claude, Codex, or Grok. For Codex, prefer gpt-5.6-sol, gpt-5.6-terra, or gpt-5.6-luna; nicknames sol/terra/luna are accepted and stored as those slugs. Use model "auto" to clear the override/default and return to the next fallback.`,
   {
     scope: z
       .enum(['chat', 'default'])
@@ -712,11 +725,20 @@ server.tool(
     model: z
       .string()
       .describe(
-        'Model slug to use, such as claude-sonnet-4-6, gpt-5-codex, or grok-4.5. Use "auto" to clear.',
+        'Model slug to use, such as claude-sonnet-4-6, gpt-5.6-sol, or grok-4.5. Codex nicknames sol, terra, and luna are accepted. Use "auto" to clear.',
       ),
   },
   async (args) => {
-    const model = args.model.trim();
+    const requested = args.model.trim();
+    const snapshot = readAgentSettingsSnapshot();
+    const providerForAlias =
+      args.provider === 'current'
+        ? snapshot?.currentRuntime
+        : args.provider;
+    const model =
+      requested.toLowerCase() === 'auto'
+        ? requested
+        : canonicalizeModelSlug(providerForAlias, requested);
 
     if (args.scope === 'default' && !isMain) {
       return {
@@ -757,7 +779,7 @@ server.tool(
       content: [
         {
           type: 'text' as const,
-          text: `Model ${args.scope === 'default' ? 'default' : 'override'} update requested for ${args.provider}. It takes effect on the next message.`,
+          text: `Model ${args.scope === 'default' ? 'default' : 'override'} update requested for ${args.provider}: ${model}. It takes effect on the next message.`,
         },
       ],
     };

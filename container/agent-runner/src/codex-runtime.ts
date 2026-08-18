@@ -93,6 +93,56 @@ function isCodexReasoningEffort(
   return CODEX_REASONING_EFFORTS.includes(effort as CodexReasoningEffort);
 }
 
+const CODEX_STDERR_NOISE =
+  /UNDICI-EHPA|trace-warnings|Reading additional input from stdin/i;
+
+export function redactCodexDetail(text: string): string {
+  return text
+    .replace(/(https?:\/\/[^:\s]+:)[^@\s]+@/gi, '$1[REDACTED]@')
+    .replace(/\baoc_[A-Za-z0-9]+\b/g, 'aoc_[REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9-]+\b/g, 'sk-[REDACTED]');
+}
+
+export function extractCodexJsonError(event: {
+  type?: string;
+  message?: string;
+  error?: { message?: string } | string;
+}): string | undefined {
+  if (event.type !== 'error' && event.type !== 'turn.failed') return undefined;
+  if (typeof event.message === 'string' && event.message.trim()) {
+    return event.message.trim();
+  }
+  if (typeof event.error === 'string' && event.error.trim()) {
+    return event.error.trim();
+  }
+  if (
+    event.error &&
+    typeof event.error === 'object' &&
+    typeof event.error.message === 'string' &&
+    event.error.message.trim()
+  ) {
+    return event.error.message.trim();
+  }
+  return undefined;
+}
+
+export function formatCodexExitError(
+  code: number | null,
+  stderr: string,
+  jsonError?: string,
+): string {
+  const prefix = `codex exited with code ${code}`;
+  const fromJson = jsonError?.trim();
+  if (fromJson) return redactCodexDetail(`${prefix}: ${fromJson}`);
+
+  const useful = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !CODEX_STDERR_NOISE.test(line));
+  if (useful.length === 0) return prefix;
+  return redactCodexDetail(`${prefix}: ${useful.join(' ').slice(0, 400)}`);
+}
+
 function codexSettingArgs(
   settings: RuntimeAgentSettings | undefined,
 ): string[] {
@@ -215,9 +265,11 @@ function runCodexTurn(
     });
 
     let buf = '';
+    let stderr = '';
     let newSessionId: string | undefined;
     const agentMessages: string[] = [];
     let turnCompleted = false;
+    let jsonError: string | undefined;
 
     const handleLine = (line: string): void => {
       const trimmed = line.trim();
@@ -225,6 +277,8 @@ function runCodexTurn(
       let ev: {
         type?: string;
         thread_id?: string;
+        message?: string;
+        error?: { message?: string } | string;
         item?: { type?: string; text?: string };
       };
       try {
@@ -232,6 +286,8 @@ function runCodexTurn(
       } catch {
         return; // non-JSON line (banner/warning)
       }
+      const parsedError = extractCodexJsonError(ev);
+      if (parsedError) jsonError = parsedError;
       if (ev.type === 'thread.started' && ev.thread_id) {
         newSessionId = ev.thread_id;
       } else if (
@@ -254,8 +310,10 @@ function runCodexTurn(
       }
     });
     child.stderr.on('data', (d: Buffer) => {
-      const s = d.toString().trim();
-      if (s) deps.log(`[codex] ${s.slice(0, 300)}`);
+      const s = d.toString();
+      stderr += s;
+      const trimmed = s.trim();
+      if (trimmed) deps.log(`[codex] ${trimmed.slice(0, 300)}`);
     });
     child.on('error', reject);
     child.on('close', (code) => {
@@ -265,7 +323,7 @@ function runCodexTurn(
         ? agentMessages[agentMessages.length - 1]
         : null;
       if (code !== 0 && !turnCompleted) {
-        reject(new Error(`codex exited with code ${code}`));
+        reject(new Error(formatCodexExitError(code, stderr, jsonError)));
         return;
       }
       resolve({ sessionId: newSessionId, result });

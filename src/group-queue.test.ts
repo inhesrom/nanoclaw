@@ -2,7 +2,7 @@ import type { ChildProcess } from 'child_process';
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
-import { GroupQueue } from './group-queue.js';
+import { formatAgentFailureNotice, GroupQueue } from './group-queue.js';
 
 // Mock config to control concurrency limit
 vi.mock('./config.js', () => ({
@@ -214,7 +214,38 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(200000); // Wait a long time
     expect(callCount).toBe(countAfterMaxRetries);
     expect(exhausted).toHaveBeenCalledOnce();
-    expect(exhausted).toHaveBeenCalledWith('group1@g.us');
+    expect(exhausted).toHaveBeenCalledWith('group1@g.us', undefined);
+  });
+
+  it('passes the last recorded error when retries are exhausted', async () => {
+    const exhausted = vi.fn();
+    const processMessages = vi.fn(async () => false);
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.setRetriesExhaustedFn(exhausted);
+    queue.recordLastError(
+      'group1@g.us',
+      'codex exited with code 1: unknown model sol',
+    );
+    queue.enqueueMessageCheck('group1@g.us');
+
+    const retryDelays = [5000, 10000, 20000, 40000, 80000];
+    await vi.advanceTimersByTimeAsync(10);
+    for (const delay of retryDelays) {
+      await vi.advanceTimersByTimeAsync(delay + 10);
+    }
+
+    expect(exhausted).toHaveBeenCalledWith(
+      'group1@g.us',
+      'codex exited with code 1: unknown model sol',
+    );
+  });
+
+  it('formats a retry-exhausted notice with the agent error', () => {
+    expect(formatAgentFailureNotice()).toContain('Send another message');
+    expect(
+      formatAgentFailureNotice('codex exited with code 1: unknown model sol'),
+    ).toContain('unknown model sol');
   });
 
   // --- Waiting groups get drained when slots free up ---

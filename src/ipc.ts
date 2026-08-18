@@ -575,21 +575,30 @@ export async function processTaskIpc(
         );
         setAgentDefaultSettings(defaults);
         logger.info(
-          { sourceGroup, provider, model },
+          {
+            sourceGroup,
+            provider,
+            model: defaults[provider]?.model ?? model,
+          },
           'Agent model default updated',
         );
       } else if (sourceEntry) {
         const [jid, group] = sourceEntry;
+        const agentSettings = updateProviderAgentSettings(
+          group.agentSettings,
+          provider,
+          { model },
+        );
         deps.registerGroup(jid, {
           ...group,
-          agentSettings: updateProviderAgentSettings(
-            group.agentSettings,
-            provider,
-            { model },
-          ),
+          agentSettings,
         });
         logger.info(
-          { sourceGroup, provider, model },
+          {
+            sourceGroup,
+            provider,
+            model: agentSettings[provider]?.model ?? model,
+          },
           'Agent model override updated',
         );
       } else {
