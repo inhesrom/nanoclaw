@@ -32,8 +32,12 @@ import {
   STORE_DIR,
 } from '../config.js';
 import {
+  enqueueWhatsAppOutbox,
   getLastGroupSync,
   getMessageContentById,
+  getPendingWhatsAppOutbox,
+  markWhatsAppOutboxSent,
+  recordWhatsAppOutboxFailure,
   setLastGroupSync,
   updateChatName,
 } from '../db.js';
@@ -51,8 +55,10 @@ import {
   RegisteredGroup,
 } from '../types.js';
 import { registerChannel, ChannelOpts } from './registry.js';
+import { formatWhatsAppOutbound } from '../whatsapp-outbox.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const OUTBOX_RETRY_MS = 10_000;
 
 const AUTH_STATUS_NEEDS_REAUTH = 'needs-reauth';
 const AUTH_STATUS_LOGGED_OUT = 'logged-out';
@@ -128,8 +134,8 @@ export class WhatsAppChannel implements Channel {
   private sock!: WASocket;
   private connected = false;
   private lidToPhoneMap: Record<string, string> = {};
-  private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
+  private outboxRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private groupSyncTimerStarted = false;
   /** Cache of recently sent messages for retry requests (max 256 entries). */
   private sentMessageCache = new Map<string, ProtoTypes.IMessage>();
@@ -269,7 +275,7 @@ export class WhatsAppChannel implements Channel {
           {
             reason,
             shouldReconnect,
-            queuedMessages: this.outgoingQueue.length,
+            queuedMessages: getPendingWhatsAppOutbox().length,
           },
           'Connection closed',
         );
@@ -479,37 +485,16 @@ export class WhatsAppChannel implements Channel {
     // On a shared number, prefix is also needed in DMs (including self-chat)
     // to distinguish bot output from user messages.
     // Skip only when the assistant has its own dedicated phone number.
-    const prefixed = ASSISTANT_HAS_OWN_NUMBER
-      ? text
-      : `${ASSISTANT_NAME}: ${text}`;
-
+    const prefixed = formatWhatsAppOutbound(text);
+    enqueueWhatsAppOutbox(jid, prefixed);
     if (!this.connected) {
-      this.outgoingQueue.push({ jid, text: prefixed });
       logger.info(
-        { jid, length: prefixed.length, queueSize: this.outgoingQueue.length },
-        'WA disconnected, message queued',
+        { jid, length: prefixed.length },
+        'WA disconnected, message saved in outbox',
       );
       return;
     }
-    try {
-      const sent = await this.sock.sendMessage(jid, { text: prefixed });
-      // Cache for retry requests (recipient may ask us to re-encrypt)
-      if (sent?.key?.id && sent.message) {
-        this.sentMessageCache.set(sent.key.id, sent.message);
-        if (this.sentMessageCache.size > 256) {
-          const oldest = this.sentMessageCache.keys().next().value!;
-          this.sentMessageCache.delete(oldest);
-        }
-      }
-      logger.info({ jid, length: prefixed.length }, 'Message sent');
-    } catch (err) {
-      // If send fails, queue it for retry on reconnect
-      this.outgoingQueue.push({ jid, text: prefixed });
-      logger.warn(
-        { jid, err, queueSize: this.outgoingQueue.length },
-        'Failed to send, message queued',
-      );
-    }
+    await this.flushOutgoingQueue();
   }
 
   async sendSelfMessage(
@@ -540,6 +525,8 @@ export class WhatsAppChannel implements Channel {
 
   async disconnect(): Promise<void> {
     this.connected = false;
+    if (this.outboxRetryTimer) clearTimeout(this.outboxRetryTimer);
+    this.outboxRetryTimer = null;
     this.sock?.end(undefined);
   }
 
@@ -797,24 +784,55 @@ export class WhatsAppChannel implements Channel {
   }
 
   private async flushOutgoingQueue(): Promise<void> {
-    if (this.flushing || this.outgoingQueue.length === 0) return;
+    if (this.flushing || !this.connected) return;
     this.flushing = true;
     try {
-      logger.info(
-        { count: this.outgoingQueue.length },
-        'Flushing outgoing message queue',
-      );
-      while (this.outgoingQueue.length > 0) {
-        const item = this.outgoingQueue.shift()!;
-        // Send directly — queued items are already prefixed by sendMessage
-        const sent = await this.sock.sendMessage(item.jid, { text: item.text });
-        if (sent?.key?.id && sent.message) {
-          this.sentMessageCache.set(sent.key.id, sent.message);
+      while (this.connected) {
+        const item = getPendingWhatsAppOutbox(1)[0];
+        if (!item) break;
+        try {
+          // Reuse the same WhatsApp ID if a timeout occurred after delivery.
+          const sent = await this.sock.sendMessage(
+            item.chat_jid,
+            { text: item.text },
+            { messageId: item.id },
+          );
+          if (sent?.key?.id && sent.message) {
+            this.sentMessageCache.set(sent.key.id, sent.message);
+            if (this.sentMessageCache.size > 256) {
+              const oldest = this.sentMessageCache.keys().next().value!;
+              this.sentMessageCache.delete(oldest);
+            }
+          }
+          markWhatsAppOutboxSent(item.id);
+          logger.info(
+            {
+              jid: item.chat_jid,
+              length: item.text.length,
+              attempts: item.attempts + 1,
+            },
+            'Message sent',
+          );
+        } catch (err) {
+          recordWhatsAppOutboxFailure(item.id);
+          logger.warn(
+            { jid: item.chat_jid, err, attempts: item.attempts + 1 },
+            'Failed to send; message remains in durable outbox',
+          );
+          if (!this.outboxRetryTimer) {
+            this.outboxRetryTimer = setTimeout(() => {
+              this.outboxRetryTimer = null;
+              this.flushOutgoingQueue().catch((retryErr) =>
+                logger.error(
+                  { err: retryErr },
+                  'Failed to retry WhatsApp outbox',
+                ),
+              );
+            }, OUTBOX_RETRY_MS);
+            this.outboxRetryTimer.unref?.();
+          }
+          break;
         }
-        logger.info(
-          { jid: item.jid, length: item.text.length },
-          'Queued message sent',
-        );
       }
     } finally {
       this.flushing = false;

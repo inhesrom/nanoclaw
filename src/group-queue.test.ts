@@ -217,7 +217,7 @@ describe('GroupQueue', () => {
     expect(exhausted).toHaveBeenCalledWith('group1@g.us', undefined);
   });
 
-  it('passes the last recorded error when retries are exhausted', async () => {
+  it('notifies immediately when the agent error cannot be fixed by retrying', async () => {
     const exhausted = vi.fn();
     const processMessages = vi.fn(async () => false);
 
@@ -229,23 +229,22 @@ describe('GroupQueue', () => {
     );
     queue.enqueueMessageCheck('group1@g.us');
 
-    const retryDelays = [5000, 10000, 20000, 40000, 80000];
     await vi.advanceTimersByTimeAsync(10);
-    for (const delay of retryDelays) {
-      await vi.advanceTimersByTimeAsync(delay + 10);
-    }
-
+    expect(processMessages).toHaveBeenCalledTimes(1);
     expect(exhausted).toHaveBeenCalledWith(
       'group1@g.us',
       'codex exited with code 1: unknown model sol',
     );
   });
 
-  it('formats a retry-exhausted notice with the agent error', () => {
+  it('formats a safe failure notice without forwarding internal errors', () => {
     expect(formatAgentFailureNotice()).toContain('Send another message');
     expect(
       formatAgentFailureNotice('codex exited with code 1: unknown model sol'),
-    ).toContain('unknown model sol');
+    ).toContain('selected AI model is unavailable');
+    expect(
+      formatAgentFailureNotice('free Grok Build usage limit: secret-token'),
+    ).not.toContain('secret-token');
   });
 
   // --- Waiting groups get drained when slots free up ---

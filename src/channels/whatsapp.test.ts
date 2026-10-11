@@ -1,6 +1,16 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
+const outbox = vi.hoisted(() => ({
+  rows: [] as Array<{
+    id: string;
+    chat_jid: string;
+    text: string;
+    attempts: number;
+  }>,
+  nextId: 0,
+}));
+
 // --- Mocks ---
 
 // Mock config
@@ -42,6 +52,20 @@ vi.mock('../logger.js', () => ({
 
 // Mock db
 vi.mock('../db.js', () => ({
+  enqueueWhatsAppOutbox: vi.fn((chatJid: string, text: string) => {
+    const id = `OUTBOX${++outbox.nextId}`;
+    outbox.rows.push({ id, chat_jid: chatJid, text, attempts: 0 });
+    return id;
+  }),
+  getPendingWhatsAppOutbox: vi.fn(() => [...outbox.rows]),
+  markWhatsAppOutboxSent: vi.fn((id: string) => {
+    const index = outbox.rows.findIndex((row) => row.id === id);
+    if (index >= 0) outbox.rows.splice(index, 1);
+  }),
+  recordWhatsAppOutboxFailure: vi.fn((id: string) => {
+    const row = outbox.rows.find((item) => item.id === id);
+    if (row) row.attempts++;
+  }),
   getLastGroupSync: vi.fn(() => null),
   getMessageContentById: vi.fn(() => undefined),
   setLastGroupSync: vi.fn(),
@@ -183,6 +207,8 @@ async function triggerMessages(messages: unknown[]) {
 describe('WhatsAppChannel', () => {
   beforeEach(() => {
     fakeSocket = createFakeSocket();
+    outbox.rows.length = 0;
+    outbox.nextId = 0;
     vi.mocked(getLastGroupSync).mockReturnValue(null);
   });
 
@@ -272,9 +298,11 @@ describe('WhatsAppChannel', () => {
       await (channel as any).flushOutgoingQueue();
 
       // Group messages get prefixed when flushed
-      expect(fakeSocket.sendMessage).toHaveBeenCalledWith('test@g.us', {
-        text: 'Andy: Queued message',
-      });
+      expect(fakeSocket.sendMessage).toHaveBeenCalledWith(
+        'test@g.us',
+        { text: 'Andy: Queued message' },
+        { messageId: 'OUTBOX1' },
+      );
     });
 
     it('disconnects cleanly', async () => {
@@ -846,9 +874,11 @@ describe('WhatsAppChannel', () => {
 
       await channel.sendMessage('test@g.us', 'Hello');
       // Group messages get prefixed with assistant name
-      expect(fakeSocket.sendMessage).toHaveBeenCalledWith('test@g.us', {
-        text: 'Andy: Hello',
-      });
+      expect(fakeSocket.sendMessage).toHaveBeenCalledWith(
+        'test@g.us',
+        { text: 'Andy: Hello' },
+        { messageId: 'OUTBOX1' },
+      );
     });
 
     it('prefixes direct chat messages on shared number', async () => {
@@ -862,6 +892,7 @@ describe('WhatsAppChannel', () => {
       expect(fakeSocket.sendMessage).toHaveBeenCalledWith(
         '123@s.whatsapp.net',
         { text: 'Andy: Hello' },
+        { messageId: 'OUTBOX1' },
       );
     });
 
@@ -884,9 +915,53 @@ describe('WhatsAppChannel', () => {
       fakeSocket.sendMessage.mockRejectedValueOnce(new Error('Network error'));
 
       await channel.sendMessage('test@g.us', 'Will fail');
+      expect(outbox.rows).toMatchObject([
+        { id: 'OUTBOX1', text: 'Andy: Will fail', attempts: 1 },
+      ]);
 
-      // Should not throw, message queued for retry
-      // The queue should have the message
+      await channel.disconnect();
+    });
+
+    it('retries a failed send without waiting for a reconnect', async () => {
+      const channel = new WhatsAppChannel(createTestOpts());
+      await connectChannel(channel);
+      vi.useFakeTimers();
+      try {
+        fakeSocket.sendMessage.mockRejectedValueOnce(new Error('Timed Out'));
+        await channel.sendMessage('test@g.us', 'Retry me');
+        expect(outbox.rows).toHaveLength(1);
+
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(fakeSocket.sendMessage).toHaveBeenCalledTimes(2);
+        expect(fakeSocket.sendMessage.mock.calls[0][2]).toEqual({
+          messageId: 'OUTBOX1',
+        });
+        expect(fakeSocket.sendMessage.mock.calls[1][2]).toEqual({
+          messageId: 'OUTBOX1',
+        });
+        expect(outbox.rows).toHaveLength(0);
+      } finally {
+        await channel.disconnect();
+        vi.useRealTimers();
+      }
+    });
+
+    it('sends a saved message when a new channel instance connects', async () => {
+      const oldChannel = new WhatsAppChannel(createTestOpts());
+      await oldChannel.sendMessage('test@g.us', 'Saved before restart');
+      expect(outbox.rows).toHaveLength(1);
+
+      const newChannel = new WhatsAppChannel(createTestOpts());
+      await connectChannel(newChannel);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(fakeSocket.sendMessage).toHaveBeenCalledWith(
+        'test@g.us',
+        { text: 'Andy: Saved before restart' },
+        { messageId: 'OUTBOX1' },
+      );
+      expect(outbox.rows).toHaveLength(0);
     });
 
     it('confirms a raw self-chat prompt with its reserved message ID', async () => {
@@ -965,15 +1040,24 @@ describe('WhatsAppChannel', () => {
 
       expect(fakeSocket.sendMessage).toHaveBeenCalledTimes(3);
       // Group messages get prefixed
-      expect(fakeSocket.sendMessage).toHaveBeenNthCalledWith(1, 'test@g.us', {
-        text: 'Andy: First',
-      });
-      expect(fakeSocket.sendMessage).toHaveBeenNthCalledWith(2, 'test@g.us', {
-        text: 'Andy: Second',
-      });
-      expect(fakeSocket.sendMessage).toHaveBeenNthCalledWith(3, 'test@g.us', {
-        text: 'Andy: Third',
-      });
+      expect(fakeSocket.sendMessage).toHaveBeenNthCalledWith(
+        1,
+        'test@g.us',
+        { text: 'Andy: First' },
+        { messageId: 'OUTBOX1' },
+      );
+      expect(fakeSocket.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        'test@g.us',
+        { text: 'Andy: Second' },
+        { messageId: 'OUTBOX2' },
+      );
+      expect(fakeSocket.sendMessage).toHaveBeenNthCalledWith(
+        3,
+        'test@g.us',
+        { text: 'Andy: Third' },
+        { messageId: 'OUTBOX3' },
+      );
     });
   });
 

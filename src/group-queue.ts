@@ -29,11 +29,21 @@ interface GroupState {
 }
 
 export function formatAgentFailureNotice(error?: string): string {
-  const detail = error?.trim();
-  if (!detail) {
-    return 'The agent failed after several retries. Send another message to try again.';
-  }
-  return `The agent failed after several retries:\n${detail.slice(0, 500)}\n\nSend another message to try again.`;
+  const detail = error?.toLowerCase() || '';
+  const reason = /usage limit|insufficient quota|quota exceeded/.test(detail)
+    ? 'The AI service has reached its usage limit.'
+    : /unknown model|model not found/.test(detail)
+      ? 'The selected AI model is unavailable.'
+      : /timed out|timeout/.test(detail)
+        ? 'The agent timed out.'
+        : 'The agent could not complete your request.';
+  return `${reason} Your message was saved. Send another message to retry.`;
+}
+
+function isNonRetryableAgentError(error: string | null): boolean {
+  return /free grok build usage limit|insufficient quota|quota exceeded|unknown model|model not found/i.test(
+    error || '',
+  );
 }
 
 interface SendMessageOptions {
@@ -302,10 +312,11 @@ export class GroupQueue {
 
   private scheduleRetry(groupJid: string, state: GroupState): void {
     state.retryCount++;
-    if (state.retryCount > MAX_RETRIES) {
+    const nonRetryable = isNonRetryableAgentError(state.lastError);
+    if (nonRetryable || state.retryCount > MAX_RETRIES) {
       logger.error(
-        { groupJid, retryCount: state.retryCount },
-        'Max retries exceeded, dropping messages (will retry on next incoming message)',
+        { groupJid, retryCount: state.retryCount, nonRetryable },
+        'Agent processing stopped; messages will retry on next incoming message',
       );
       this.retriesExhaustedFn?.(groupJid, state.lastError ?? undefined);
       state.retryCount = 0;

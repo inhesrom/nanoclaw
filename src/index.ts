@@ -67,7 +67,8 @@ import {
   buildAgentSettingsSnapshot,
   resolveRuntimeAgentSettings,
 } from './agent-settings.js';
-import { formatAgentFailureNotice, GroupQueue } from './group-queue.js';
+import { sendAgentFailureNotice } from './agent-failure-notice.js';
+import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
@@ -1036,16 +1037,9 @@ async function main(): Promise<void> {
     }
     evenHubWhatsAppBridge?.requestDispatch();
     const channel = findChannel(channels, chatJid);
-    if (channel) {
-      channel
-        .sendMessage(chatJid, formatAgentFailureNotice(error))
-        .catch((err) =>
-          logger.error(
-            { chatJid, err },
-            'Failed to send retry-exhausted notice',
-          ),
-        );
-    }
+    sendAgentFailureNotice(chatJid, error, channel).catch((err) =>
+      logger.error({ chatJid, err }, 'Failed to queue agent failure notice'),
+    );
   });
   evenHubWhatsAppBridge?.start();
   recoverPendingMessages();

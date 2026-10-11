@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { randomBytes } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -51,6 +52,16 @@ function createSchema(database: Database.Database): void {
       FOREIGN KEY (chat_jid) REFERENCES chats(jid)
     );
     CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp);
+
+    CREATE TABLE IF NOT EXISTS whatsapp_outbox (
+      id TEXT PRIMARY KEY,
+      chat_jid TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_whatsapp_outbox_created
+      ON whatsapp_outbox(created_at);
 
     CREATE TABLE IF NOT EXISTS scheduled_tasks (
       id TEXT PRIMARY KEY,
@@ -346,6 +357,43 @@ export function isDatabaseReady(): boolean {
   } catch {
     return false;
   }
+}
+
+export interface WhatsAppOutboxMessage {
+  id: string;
+  chat_jid: string;
+  text: string;
+  attempts: number;
+}
+
+/** Store before sending so a timeout or host restart cannot lose the reply. */
+export function enqueueWhatsAppOutbox(chatJid: string, text: string): string {
+  const id = randomBytes(16).toString('hex').toUpperCase();
+  db.prepare(
+    `INSERT INTO whatsapp_outbox (id, chat_jid, text, created_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(id, chatJid, text, new Date().toISOString());
+  return id;
+}
+
+export function getPendingWhatsAppOutbox(limit = -1): WhatsAppOutboxMessage[] {
+  return db
+    .prepare(
+      `SELECT id, chat_jid, text, attempts FROM whatsapp_outbox
+       ORDER BY rowid LIMIT ?`,
+    )
+    .all(limit) as WhatsAppOutboxMessage[];
+}
+
+export function markWhatsAppOutboxSent(id: string): void {
+  db.prepare('DELETE FROM whatsapp_outbox WHERE id = ?').run(id);
+}
+
+export function recordWhatsAppOutboxFailure(id: string): void {
+  db.prepare(
+    `UPDATE whatsapp_outbox
+     SET attempts = attempts + 1 WHERE id = ?`,
+  ).run(id);
 }
 
 /**

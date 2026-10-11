@@ -5,6 +5,34 @@ import path from 'path';
 import { describe, expect, it, vi } from 'vitest';
 
 describe('database migrations', () => {
+  it('preserves unsent WhatsApp messages across database reopen', async () => {
+    const repoRoot = process.cwd();
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'nanoclaw-outbox-test-'),
+    );
+
+    try {
+      process.chdir(tempDir);
+      vi.resetModules();
+      const db = await import('./db.js');
+      db.initDatabase();
+      const id = db.enqueueWhatsAppOutbox('test@g.us', 'Andy: saved reply');
+      db.recordWhatsAppOutboxFailure(id);
+      db._closeDatabase();
+
+      db.initDatabase();
+      expect(db.getPendingWhatsAppOutbox()).toEqual([
+        { id, chat_jid: 'test@g.us', text: 'Andy: saved reply', attempts: 1 },
+      ]);
+      db.markWhatsAppOutboxSent(id);
+      expect(db.getPendingWhatsAppOutbox()).toEqual([]);
+      db._closeDatabase();
+    } finally {
+      process.chdir(repoRoot);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('defaults Telegram backfill chats to direct messages', async () => {
     const repoRoot = process.cwd();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-db-test-'));

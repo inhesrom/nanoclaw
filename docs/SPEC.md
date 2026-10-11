@@ -234,6 +234,20 @@ To add a new channel, contribute a skill to `.claude/skills/add-<name>/` that:
 
 See existing skills (`/add-whatsapp`, `/add-telegram`, `/add-slack`, `/add-discord`, `/add-gmail`) for the pattern.
 
+### Failure replies and WhatsApp delivery
+
+The host sends a short error reply when an agent cannot complete a message. Known
+quota and model errors stop immediately; other agent failures use the group retry
+schedule before a final notice. The agent container does not have to be running
+for the host to queue the notice.
+
+WhatsApp replies and notices enter `whatsapp_outbox` in SQLite before the send.
+The channel retries failed sends every 10 seconds while connected and flushes the
+outbox after reconnect or host restart. Retries reuse the same WhatsApp message
+ID. A send timeout can leave delivery ambiguous, so a duplicate is still possible.
+If the host process or WhatsApp account is unavailable, delivery waits until it
+returns; immediate alerts during a full host outage need an independent monitor.
+
 ---
 
 ## Folder Structure
