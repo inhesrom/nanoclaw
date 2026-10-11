@@ -96,5 +96,19 @@ USER node
 # Set working directory to group workspace
 WORKDIR /workspace/group
 
+# The CLI updater downloads a new binary but does not replace the real file in
+# /usr/local/bin (the installer normally creates a symlink there). Refresh it
+# on every build and verify the binary that agent runs will actually execute.
+USER root
+ARG GROK_REFRESH
+RUN echo "Grok refresh: ${GROK_REFRESH}" \
+    && /usr/local/bin/grok update \
+    && GROK_REAL="$(find /root/.grok/downloads -maxdepth 1 -type f -name 'grok-[0-9]*-linux-*' | sort -V | tail -n 1)" \
+    && if [ -n "$GROK_REAL" ]; then install -m 755 "$GROK_REAL" /usr/local/bin/grok; fi \
+    && GROK_VERSION="$(/usr/local/bin/grok version | awk '{print $2}')" \
+    && dpkg --compare-versions "$GROK_VERSION" ge 1.0.13 \
+    && /usr/local/bin/grok version
+USER node
+
 # Entry point reads JSON from stdin, outputs JSON to stdout
 ENTRYPOINT ["/app/entrypoint.sh"]

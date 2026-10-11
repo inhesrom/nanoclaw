@@ -13,7 +13,9 @@ CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-docker}"
 echo "Building NanoClaw agent container image..."
 echo "Image: ${IMAGE_NAME}:${TAG}"
 
-${CONTAINER_RUNTIME} build -t "${IMAGE_NAME}:${TAG}" .
+${CONTAINER_RUNTIME} build \
+  --build-arg "GROK_REFRESH=$(date -u +%Y%m%d%H%M%S)" \
+  -t "${IMAGE_NAME}:${TAG}" .
 
 echo ""
 echo "Build complete!"
