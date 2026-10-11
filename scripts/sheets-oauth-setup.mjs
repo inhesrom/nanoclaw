@@ -29,17 +29,55 @@ const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const OUT_DIR = path.join(os.homedir(), '.config', 'nanoclaw-sheets');
 const OUT_FILE = path.join(OUT_DIR, 'credentials.json');
 
+function loadExistingCreds() {
+  try {
+    return JSON.parse(fs.readFileSync(OUT_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+async function refreshAccessToken(clientId, clientSecret, refreshToken) {
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+    }),
+  });
+  const body = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`refresh failed (${resp.status}): ${body.slice(0, 300)}`);
+  }
+  const tokens = JSON.parse(body);
+  if (!tokens.access_token) {
+    throw new Error('refresh response had no access_token');
+  }
+  return tokens.access_token;
+}
+
+const existing = loadExistingCreds();
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const clientId =
-  process.env.GOOGLE_CLIENT_ID || (await rl.question('OAuth Client ID: ')).trim();
+  process.env.GOOGLE_CLIENT_ID ||
+  existing.client_id ||
+  (await rl.question('OAuth Client ID: ')).trim();
 const clientSecret =
   process.env.GOOGLE_CLIENT_SECRET ||
+  existing.client_secret ||
   (await rl.question('OAuth Client Secret: ')).trim();
 rl.close();
 
 if (!clientId || !clientSecret) {
   console.error('Client ID and secret are required.');
   process.exit(1);
+}
+
+if (existing.client_id && !process.env.GOOGLE_CLIENT_ID) {
+  console.log(`Reusing OAuth client from ${OUT_FILE}`);
 }
 
 const authUrl =
@@ -57,6 +95,15 @@ console.log('\nOpen this URL in your browser and sign in as the Google account')
 console.log('whose sheets the agent should edit:\n');
 console.log(`  ${authUrl}\n`);
 console.log(`Waiting for the OAuth callback on ${REDIRECT_URI} ...`);
+console.log(
+  'If you are remote: ssh -N -L 8766:localhost:8766 USER@SERVER then open the URL locally.',
+);
+console.log(
+  'Before authorizing: GCP project nanoclawproject-495505 consent screen must be In production,',
+);
+console.log(
+  'or this refresh token will die again in ~7 days. Unverified personal use is fine.',
+);
 
 const code = await new Promise((resolve, reject) => {
   const server = http.createServer((req, res) => {
@@ -120,5 +167,20 @@ fs.writeFileSync(
   ) + '\n',
   { mode: 0o600 },
 );
+
+try {
+  await refreshAccessToken(clientId, clientSecret, tokens.refresh_token);
+} catch (err) {
+  console.error(`Saved ${OUT_FILE} but immediate refresh failed: ${err.message}`);
+  console.error(
+    'The new grant is not usable. Confirm the OAuth client is valid and the consent screen is published.',
+  );
+  process.exit(1);
+}
+
 console.log(`\nSaved ${OUT_FILE}`);
-console.log('Done. The agent picks this up on its next message (no restart needed).');
+console.log('Refresh verified. The agent picks this up on its next message (no restart needed).');
+console.log('Health check:  bash scripts/check-google-auth.sh --host');
+console.log(
+  'If this dies again in ~7 days, the GCP consent screen is still in Testing — publish Production and re-run this script.',
+);

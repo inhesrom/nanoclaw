@@ -84,6 +84,7 @@ import {
   shouldDropMessage,
 } from './sender-allowlist.js';
 import { startSessionCleanup } from './session-cleanup.js';
+import { startGoogleAuthMonitor } from './google-auth-monitor.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -963,21 +964,27 @@ async function main(): Promise<void> {
   }
 
   // Start subsystems (independently of connection handler)
+  const sendOutbound = async (jid: string, rawText: string) => {
+    const channel = findChannel(channels, jid);
+    if (!channel) {
+      logger.warn({ jid }, 'No channel owns JID, cannot send message');
+      return;
+    }
+    const text = formatOutbound(rawText);
+    if (text) await channel.sendMessage(jid, text);
+  };
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
     getSessions: () => sessions,
     queue,
     onProcess: (groupJid, proc, containerName, groupFolder) =>
       queue.registerProcess(groupJid, proc, containerName, groupFolder),
-    sendMessage: async (jid, rawText) => {
-      const channel = findChannel(channels, jid);
-      if (!channel) {
-        logger.warn({ jid }, 'No channel owns JID, cannot send message');
-        return;
-      }
-      const text = formatOutbound(rawText);
-      if (text) await channel.sendMessage(jid, text);
-    },
+    sendMessage: sendOutbound,
+  });
+  startGoogleAuthMonitor({
+    sendMessage: sendOutbound,
+    getAlertJid: () =>
+      Object.entries(registeredGroups).find(([, group]) => group.isMain)?.[0],
   });
   startIpcWatcher({
     sendMessage: (jid, text) => {
